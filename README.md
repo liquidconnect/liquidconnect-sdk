@@ -68,7 +68,21 @@ then open https://test.liquidconnect.io, start a connection, and `link` the `req
 | `link` | `liquidconnect://` / app-link parsing |
 | `core` | Sans-io session state machine — bring your own transport if you have one |
 | `transport` | Ready-made tokio transport (default feature) |
-| `approval` | A sign request's PSET as structure to render, honest about confidential fields |
+| `approval` | A sign request's PSET as structure to render, honest about confidential fields; payjoin-aware annotation |
+| `payjoin` | Client for SideSwap's payjoin service: pay network fees in USDt, no L-BTC needed |
+
+## Kotlin and Swift
+
+`lc-wallet-ffi` is the uniffi surface over the core — `LiquidConnectWallet`,
+`WalletEventListener`, `summarizePset` — with generated bindings committed
+under `bindings/` so the host-language API is reviewable as-is. See
+`bindings/README.md` for linking instructions and regeneration.
+
+Probe the live payjoin service (an unfinished order expires harmlessly):
+
+```
+cargo run --example payjoin-probe
+```
 
 ## What this SDK will never do
 

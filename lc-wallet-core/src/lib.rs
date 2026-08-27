@@ -27,6 +27,7 @@ pub mod approval;
 pub mod core;
 pub mod key;
 pub mod link;
+pub mod payjoin;
 #[cfg(feature = "transport")]
 pub mod transport;
 pub mod wire;

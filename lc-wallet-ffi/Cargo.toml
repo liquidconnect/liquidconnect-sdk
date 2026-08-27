@@ -1,0 +1,26 @@
+[package]
+name = "lc-wallet-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "uniffi bindings for lc-wallet-core: Kotlin and Swift wallet integrations."
+
+[lib]
+name = "lc_wallet_ffi"
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+lc-wallet-core = { path = "../lc-wallet-core" }
+uniffi = "0.29"
+tokio.workspace = true
+thiserror = "1"
+anyhow.workspace = true
+hex = "0.4"
+
+[features]
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]

@@ -29,6 +29,10 @@ pub struct OutputSummary {
     pub amount: Option<u64>,
     /// The Liquid fee output: empty script, always explicit.
     pub is_fee: bool,
+    /// The payjoin service-fee output, when a payjoin context has been
+    /// applied — the declared thing it is, so the honest flow does not
+    /// render as an unexplained extra leg. See [`TransactionSummary::annotate_payjoin`].
+    pub is_payjoin_service_fee: bool,
     /// True when amount or asset is blinded and this summary therefore
     /// cannot say what the output moves.
     pub confidential: bool,
@@ -44,6 +48,34 @@ pub struct TransactionSummary {
     /// as a total: partial sums presented as totals are how a person
     /// approves more than they saw.
     pub fully_explicit: bool,
+}
+
+/// What a payjoin order adds to a transaction, for the approval screen.
+#[derive(Debug, Clone)]
+pub struct PayjoinContext {
+    /// The order's `fee_address` — where the service fee goes.
+    pub fee_address: String,
+}
+
+impl TransactionSummary {
+    /// Mark the payjoin service-fee output so it renders as the declared
+    /// thing it is ("network fee paid via payjoin") instead of an
+    /// unexplained extra leg. Returns how many outputs matched — 0 means
+    /// the claimed context does not describe this transaction, which the
+    /// caller should treat as a mismatch, not silence.
+    pub fn annotate_payjoin(&mut self, ctx: &PayjoinContext) -> anyhow::Result<usize> {
+        use std::str::FromStr as _;
+        let fee_addr = elements::Address::from_str(&ctx.fee_address)?;
+        let fee_script = fee_addr.script_pubkey().to_hex();
+        let mut marked = 0;
+        for output in &mut self.outputs {
+            if output.script_hex == fee_script {
+                output.is_payjoin_service_fee = true;
+                marked += 1;
+            }
+        }
+        Ok(marked)
+    }
 }
 
 fn address_params(network: Network) -> &'static AddressParams {
@@ -89,6 +121,7 @@ pub fn summarize_pset(pset_b64: &str, network: Network) -> anyhow::Result<Transa
             asset: o.asset.map(|a| a.to_string()),
             amount: o.amount,
             is_fee,
+            is_payjoin_service_fee: false,
             confidential,
         });
     }
@@ -154,6 +187,43 @@ mod tests {
         assert_eq!(payment.amount, Some(1_000));
         assert_eq!(payment.asset.as_deref(), Some(TESTNET_LBTC));
         assert!(summary.outputs[1].is_fee);
+    }
+
+    /// The payjoin service-fee output is marked by script match, and a
+    /// context that matches nothing says so instead of succeeding.
+    #[test]
+    fn payjoin_annotation_marks_by_script_and_reports_misses() {
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        let dest = Script::from(vec![0x00, 0x14].into_iter().chain([7u8; 20]).collect::<Vec<u8>>());
+        tx.add_output(pset::Output::from_txout(explicit_txout(
+            TESTNET_LBTC,
+            1_000,
+            dest,
+        )));
+        use base64::Engine as _;
+        let b64 =
+            base64::engine::general_purpose::STANDARD.encode(elements::encode::serialize(&tx));
+        let mut summary = summarize_pset(&b64, Network::LiquidTestnet).unwrap();
+
+        let fee_address = summary.outputs[0].address.clone().unwrap();
+        let marked = summary
+            .annotate_payjoin(&PayjoinContext { fee_address })
+            .unwrap();
+        assert_eq!(marked, 1);
+        assert!(summary.outputs[0].is_payjoin_service_fee);
+
+        // A context naming an address this transaction never pays.
+        let other = elements::Address::from_script(
+            &Script::from(vec![0x00, 0x14].into_iter().chain([9u8; 20]).collect::<Vec<u8>>()),
+            None,
+            address_params(Network::LiquidTestnet),
+        )
+        .unwrap()
+        .to_string();
+        let marked = summary
+            .annotate_payjoin(&PayjoinContext { fee_address: other })
+            .unwrap();
+        assert_eq!(marked, 0, "a mismatch must be visible, not silent");
     }
 
     /// A blinded output must be reported as unreadable, and the summary

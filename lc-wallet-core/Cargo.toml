@@ -17,6 +17,7 @@ url = "2"
 base64 = "0.22"
 rand = "0.8"
 log = "0.4"
+ureq = { version = "2", features = ["json"] }
 
 # Transport (optional so a fully sans-io integration can drop tokio).
 tokio = { workspace = true, optional = true }
