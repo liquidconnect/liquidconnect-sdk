@@ -1,0 +1,33 @@
+[package]
+name = "lc-wallet-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Liquid Connect wallet-side SDK core: wire protocol, challenge login, sans-io session state machine, tokio transport, and PSET approval summaries."
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+elements = { version = "0.25.3", features = ["serde"] }
+secp256k1-zkp = { version = "0.11", features = ["serde", "global-context"] }
+hex = "0.4"
+hex-literal = "0.4"
+url = "2"
+base64 = "0.22"
+rand = "0.8"
+log = "0.4"
+
+# Transport (optional so a fully sans-io integration can drop tokio).
+tokio = { workspace = true, optional = true }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"], optional = true }
+futures = { version = "0.3", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+
+[features]
+default = ["transport"]
+transport = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures", "dep:rustls"]
+
+[[example]]
+name = "headless-wallet"
+required-features = ["transport"]
