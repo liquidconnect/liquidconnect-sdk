@@ -29,6 +29,22 @@ sha256t_hash_newtype! {
     pub struct WalletSignHash(_);
 }
 
+sha256t_hash_newtype! {
+    pub struct IdentityAuthTag = hash_str("liquidconnect/identity");
+    pub struct IdentityAuthHash(_);
+}
+
+/// The message a wallet signs to authenticate an identity-API call: a
+/// tagged hash over the server's single-use challenge, the action, and
+/// the action's primary value. Its own tag, so an identity signature
+/// can never be replayed as a Connect login nor the other way around.
+pub fn identity_auth_message(challenge: &str, action: &str, value: &str) -> Message {
+    let text =
+        format!("liquidconnect identity, nonce: {challenge}, action: {action}, value: {value}");
+    let hash = IdentityAuthHash::hash(text.as_bytes());
+    Message::from_digest(hash.to_byte_array())
+}
+
 /// The message a wallet signs to log in: a tagged hash over the server's
 /// nonce with a fixed human-readable prefix, so the signature can never
 /// be replayed as anything but a Connect login.
@@ -91,6 +107,17 @@ impl WalletKey {
         let message = get_sign_message_hash(challenge);
         SECP256K1.sign_schnorr(&message, &self.keypair)
     }
+
+    /// Sign an identity-API operation. See [`identity_auth_message`].
+    pub fn sign_identity(
+        &self,
+        challenge: &str,
+        action: &str,
+        value: &str,
+    ) -> secp256k1_zkp::schnorr::Signature {
+        let message = identity_auth_message(challenge, action, value);
+        SECP256K1.sign_schnorr(&message, &self.keypair)
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +133,20 @@ mod tests {
         let mainnet = WalletKey::new(&[7u8; 32], Network::Liquid);
         assert_eq!(a.public_key(), b.public_key());
         assert_ne!(a.public_key(), mainnet.public_key());
+    }
+
+    /// The identity-auth digest, pinned against the vector the server
+    /// pins too — drift on either side becomes a test failure here
+    /// rather than a signature that mysteriously stops verifying.
+    #[test]
+    fn identity_auth_digest_matches_the_shared_vector() {
+        let message = identity_auth_message("n1", "email_start", "a@b.c");
+        // Bytes, not Display: hash newtypes may render reversed, and the
+        // signature is made over the bytes.
+        assert_eq!(
+            hex::encode(message.as_ref()),
+            "aa28e11b46e114abcdae01742d916ef01ad4ab14e0924c2c83c3cf192adbc80d"
+        );
     }
 
     /// A login signature verifies against the tagged challenge hash and

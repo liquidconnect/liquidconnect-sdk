@@ -25,6 +25,7 @@
 
 pub mod approval;
 pub mod core;
+pub mod identity;
 pub mod key;
 pub mod link;
 pub mod payjoin;
