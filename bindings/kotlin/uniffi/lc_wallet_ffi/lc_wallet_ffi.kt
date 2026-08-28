@@ -758,6 +758,36 @@ internal open class UniffiVTableCallbackInterfaceWalletEventListener(
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -777,6 +807,32 @@ internal interface IntegrityCheckingUniffiLib : Library {
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_func_summarize_pset(
 ): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_discover(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_list(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_save(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_email_confirm(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_email_start(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_confirm(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_pay(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_sms(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_start(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_status(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_set_discoverability(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_identityservice_status(
+): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_login(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign(
@@ -792,6 +848,8 @@ fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_sign(
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_stop_session(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_walleteventlistener_on_event(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_constructor_identityservice_new(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new(
 ): Short
@@ -845,7 +903,39 @@ internal interface UniffiLib : Library {
     }
 
     // FFI functions
-    fun uniffi_lc_wallet_ffi_fn_clone_liquidconnectwallet(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_lc_wallet_ffi_fn_clone_identityservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_lc_wallet_ffi_fn_free_identityservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_constructor_identityservice_new(`baseUrl`: RustBuffer.ByValue,`gatewayBearer`: RustBuffer.ByValue,`masterBlindingKey`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_contact_address(`ptr`: Pointer,`identityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_contacts_discover(`ptr`: Pointer,`contacts`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_contacts_list(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_contacts_save(`ptr`: Pointer,`channel`: RustBuffer.ByValue,`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_email_confirm(`ptr`: Pointer,`email`: RustBuffer.ByValue,`code`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_email_start(`ptr`: Pointer,`email`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_phone_confirm(`ptr`: Pointer,`orderId`: RustBuffer.ByValue,`code`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_phone_pay(`ptr`: Pointer,`orderId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_phone_sms(`ptr`: Pointer,`orderId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_phone_start(`ptr`: Pointer,`phone`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_phone_status(`ptr`: Pointer,`orderId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_set_discoverability(`ptr`: Pointer,`byContactHash`: Byte,`byHandle`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_method_identityservice_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_clone_liquidconnectwallet(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
 fun uniffi_lc_wallet_ffi_fn_free_liquidconnectwallet(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1009,6 +1099,45 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_lc_wallet_ffi_checksum_func_summarize_pset() != 50125.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address() != 51379.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_discover() != 18815.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_list() != 43234.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_save() != 36582.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_email_confirm() != 56574.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_email_start() != 41977.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_confirm() != 25370.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_pay() != 46194.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_sms() != 26687.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_start() != 27862.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_status() != 60661.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_set_discoverability() != 56657.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_status() != 59905.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_login() != 52278.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1031,6 +1160,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_walleteventlistener_on_event() != 25536.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_constructor_identityservice_new() != 63506.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new() != 29879.toShort()) {
@@ -1352,6 +1484,458 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
     override fun write(value: ByteArray, buf: ByteBuffer) {
         buf.putInt(value.size)
         buf.put(value)
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * The identity API for the connected wallet's user: verified email
+ * (free), verified phone (paid from the wallet itself as an ordinary
+ * sign request), contact discovery and pay-to-contact. Constructed
+ * from the same master blinding key as [`LiquidConnectWallet`], so it
+ * speaks as the same identity. Every call blocks on the network —
+ * call off the UI thread.
+ */
+public interface IdentityServiceInterface {
+    
+    fun `contactAddress`(`identityId`: kotlin.String): kotlin.String
+    
+    fun `contactsDiscover`(`contacts`: List<ContactEntry>): DiscoverOutcomeInfo
+    
+    fun `contactsList`(): List<ContactInfo>
+    
+    fun `contactsSave`(`channel`: kotlin.String, `value`: kotlin.String)
+    
+    fun `emailConfirm`(`email`: kotlin.String, `code`: kotlin.String): VerifyOutcomeInfo
+    
+    fun `emailStart`(`email`: kotlin.String)
+    
+    fun `phoneConfirm`(`orderId`: kotlin.String, `code`: kotlin.String): VerifyOutcomeInfo
+    
+    /**
+     * Puts the fee payment on the wallet as an ordinary sign request;
+     * the user approves it on their own device. Nothing here handles
+     * money.
+     */
+    fun `phonePay`(`orderId`: kotlin.String)
+    
+    fun `phoneSms`(`orderId`: kotlin.String)
+    
+    fun `phoneStart`(`phone`: kotlin.String): PhoneQuoteInfo
+    
+    fun `phoneStatus`(`orderId`: kotlin.String): PhoneStageInfo
+    
+    fun `setDiscoverability`(`byContactHash`: kotlin.Boolean, `byHandle`: kotlin.Boolean)
+    
+    fun `status`(): IdentityStatusInfo
+    
+    companion object
+}
+
+/**
+ * The identity API for the connected wallet's user: verified email
+ * (free), verified phone (paid from the wallet itself as an ordinary
+ * sign request), contact discovery and pay-to-contact. Constructed
+ * from the same master blinding key as [`LiquidConnectWallet`], so it
+ * speaks as the same identity. Every call blocks on the network —
+ * call off the UI thread.
+ */
+open class IdentityService: Disposable, AutoCloseable, IdentityServiceInterface
+{
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+    /**
+     * `base_url` ends at the route prefix — through the public gateway
+     * that is `https://…/api/identity` — and `gateway_bearer` is the
+     * deployment's front-door bearer when it has one. The wallet-key
+     * signature inside every request is the caller's real
+     * authentication either way.
+     */
+    constructor(`baseUrl`: kotlin.String, `gatewayBearer`: kotlin.String?, `masterBlindingKey`: kotlin.ByteArray, `network`: Network) :
+        this(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_constructor_identityservice_new(
+        FfiConverterString.lower(`baseUrl`),FfiConverterOptionalString.lower(`gatewayBearer`),FfiConverterByteArray.lower(`masterBlindingKey`),FfiConverterTypeNetwork.lower(`network`),_status)
+}
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_free_identityservice(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_clone_identityservice(pointer!!, status)
+        }
+    }
+
+    
+    @Throws(LcException::class)override fun `contactAddress`(`identityId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_contact_address(
+        it, FfiConverterString.lower(`identityId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LcException::class)override fun `contactsDiscover`(`contacts`: List<ContactEntry>): DiscoverOutcomeInfo {
+            return FfiConverterTypeDiscoverOutcomeInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_contacts_discover(
+        it, FfiConverterSequenceTypeContactEntry.lower(`contacts`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LcException::class)override fun `contactsList`(): List<ContactInfo> {
+            return FfiConverterSequenceTypeContactInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_contacts_list(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LcException::class)override fun `contactsSave`(`channel`: kotlin.String, `value`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_contacts_save(
+        it, FfiConverterString.lower(`channel`),FfiConverterString.lower(`value`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(LcException::class)override fun `emailConfirm`(`email`: kotlin.String, `code`: kotlin.String): VerifyOutcomeInfo {
+            return FfiConverterTypeVerifyOutcomeInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_email_confirm(
+        it, FfiConverterString.lower(`email`),FfiConverterString.lower(`code`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LcException::class)override fun `emailStart`(`email`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_email_start(
+        it, FfiConverterString.lower(`email`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(LcException::class)override fun `phoneConfirm`(`orderId`: kotlin.String, `code`: kotlin.String): VerifyOutcomeInfo {
+            return FfiConverterTypeVerifyOutcomeInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_phone_confirm(
+        it, FfiConverterString.lower(`orderId`),FfiConverterString.lower(`code`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Puts the fee payment on the wallet as an ordinary sign request;
+     * the user approves it on their own device. Nothing here handles
+     * money.
+     */
+    @Throws(LcException::class)override fun `phonePay`(`orderId`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_phone_pay(
+        it, FfiConverterString.lower(`orderId`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(LcException::class)override fun `phoneSms`(`orderId`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_phone_sms(
+        it, FfiConverterString.lower(`orderId`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(LcException::class)override fun `phoneStart`(`phone`: kotlin.String): PhoneQuoteInfo {
+            return FfiConverterTypePhoneQuoteInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_phone_start(
+        it, FfiConverterString.lower(`phone`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LcException::class)override fun `phoneStatus`(`orderId`: kotlin.String): PhoneStageInfo {
+            return FfiConverterTypePhoneStageInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_phone_status(
+        it, FfiConverterString.lower(`orderId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(LcException::class)override fun `setDiscoverability`(`byContactHash`: kotlin.Boolean, `byHandle`: kotlin.Boolean)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_set_discoverability(
+        it, FfiConverterBoolean.lower(`byContactHash`),FfiConverterBoolean.lower(`byHandle`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(LcException::class)override fun `status`(): IdentityStatusInfo {
+            return FfiConverterTypeIdentityStatusInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_identityservice_status(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeIdentityService: FfiConverter<IdentityService, Pointer> {
+
+    override fun lower(value: IdentityService): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): IdentityService {
+        return IdentityService(value)
+    }
+
+    override fun read(buf: ByteBuffer): IdentityService {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: IdentityService) = 8UL
+
+    override fun write(value: IdentityService, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
     }
 }
 
@@ -1981,6 +2565,209 @@ public object FfiConverterTypeWalletEventListener: FfiConverter<WalletEventListe
 
 
 
+data class ConnectHintInfo (
+    var `requestId`: kotlin.String, 
+    /**
+     * Open it like a scanned QR payload ([`LiquidConnectWallet::open_link`]).
+     */
+    var `link`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeConnectHintInfo: FfiConverterRustBuffer<ConnectHintInfo> {
+    override fun read(buf: ByteBuffer): ConnectHintInfo {
+        return ConnectHintInfo(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ConnectHintInfo) = (
+            FfiConverterString.allocationSize(value.`requestId`) +
+            FfiConverterString.allocationSize(value.`link`)
+    )
+
+    override fun write(value: ConnectHintInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`requestId`, buf)
+            FfiConverterString.write(value.`link`, buf)
+    }
+}
+
+
+
+data class ContactEntry (
+    var `channel`: kotlin.String, 
+    var `value`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContactEntry: FfiConverterRustBuffer<ContactEntry> {
+    override fun read(buf: ByteBuffer): ContactEntry {
+        return ContactEntry(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ContactEntry) = (
+            FfiConverterString.allocationSize(value.`channel`) +
+            FfiConverterString.allocationSize(value.`value`)
+    )
+
+    override fun write(value: ContactEntry, buf: ByteBuffer) {
+            FfiConverterString.write(value.`channel`, buf)
+            FfiConverterString.write(value.`value`, buf)
+    }
+}
+
+
+
+data class ContactInfo (
+    var `identityId`: kotlin.String, 
+    var `handle`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContactInfo: FfiConverterRustBuffer<ContactInfo> {
+    override fun read(buf: ByteBuffer): ContactInfo {
+        return ContactInfo(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ContactInfo) = (
+            FfiConverterString.allocationSize(value.`identityId`) +
+            FfiConverterOptionalString.allocationSize(value.`handle`)
+    )
+
+    override fun write(value: ContactInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`identityId`, buf)
+            FfiConverterOptionalString.write(value.`handle`, buf)
+    }
+}
+
+
+
+data class ContactMatchInfo (
+    var `inputIndex`: kotlin.UInt, 
+    var `identityId`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContactMatchInfo: FfiConverterRustBuffer<ContactMatchInfo> {
+    override fun read(buf: ByteBuffer): ContactMatchInfo {
+        return ContactMatchInfo(
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ContactMatchInfo) = (
+            FfiConverterUInt.allocationSize(value.`inputIndex`) +
+            FfiConverterString.allocationSize(value.`identityId`)
+    )
+
+    override fun write(value: ContactMatchInfo, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`inputIndex`, buf)
+            FfiConverterString.write(value.`identityId`, buf)
+    }
+}
+
+
+
+data class DiscoverOutcomeInfo (
+    var `matched`: List<ContactMatchInfo>, 
+    var `unparsedInputIndexes`: List<kotlin.UInt>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDiscoverOutcomeInfo: FfiConverterRustBuffer<DiscoverOutcomeInfo> {
+    override fun read(buf: ByteBuffer): DiscoverOutcomeInfo {
+        return DiscoverOutcomeInfo(
+            FfiConverterSequenceTypeContactMatchInfo.read(buf),
+            FfiConverterSequenceUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DiscoverOutcomeInfo) = (
+            FfiConverterSequenceTypeContactMatchInfo.allocationSize(value.`matched`) +
+            FfiConverterSequenceUInt.allocationSize(value.`unparsedInputIndexes`)
+    )
+
+    override fun write(value: DiscoverOutcomeInfo, buf: ByteBuffer) {
+            FfiConverterSequenceTypeContactMatchInfo.write(value.`matched`, buf)
+            FfiConverterSequenceUInt.write(value.`unparsedInputIndexes`, buf)
+    }
+}
+
+
+
+data class IdentityStatusInfo (
+    var `identityId`: kotlin.String?, 
+    var `email`: kotlin.Boolean, 
+    var `phone`: kotlin.Boolean, 
+    var `handle`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeIdentityStatusInfo: FfiConverterRustBuffer<IdentityStatusInfo> {
+    override fun read(buf: ByteBuffer): IdentityStatusInfo {
+        return IdentityStatusInfo(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: IdentityStatusInfo) = (
+            FfiConverterOptionalString.allocationSize(value.`identityId`) +
+            FfiConverterBoolean.allocationSize(value.`email`) +
+            FfiConverterBoolean.allocationSize(value.`phone`) +
+            FfiConverterOptionalString.allocationSize(value.`handle`)
+    )
+
+    override fun write(value: IdentityStatusInfo, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`identityId`, buf)
+            FfiConverterBoolean.write(value.`email`, buf)
+            FfiConverterBoolean.write(value.`phone`, buf)
+            FfiConverterOptionalString.write(value.`handle`, buf)
+    }
+}
+
+
+
 data class LoginRequestInfo (
     var `requestId`: kotlin.String, 
     var `domain`: kotlin.String, 
@@ -2064,6 +2851,88 @@ public object FfiConverterTypeOutputSummary: FfiConverterRustBuffer<OutputSummar
             FfiConverterBoolean.write(value.`isFee`, buf)
             FfiConverterBoolean.write(value.`isPayjoinServiceFee`, buf)
             FfiConverterBoolean.write(value.`confidential`, buf)
+    }
+}
+
+
+
+data class PhoneQuoteInfo (
+    var `orderId`: kotlin.String, 
+    var `priceSats`: kotlin.ULong, 
+    var `assetId`: kotlin.String, 
+    var `connected`: kotlin.Boolean, 
+    /**
+     * Present when the wallet must approve a connection first.
+     */
+    var `connect`: ConnectHintInfo?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePhoneQuoteInfo: FfiConverterRustBuffer<PhoneQuoteInfo> {
+    override fun read(buf: ByteBuffer): PhoneQuoteInfo {
+        return PhoneQuoteInfo(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeConnectHintInfo.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PhoneQuoteInfo) = (
+            FfiConverterString.allocationSize(value.`orderId`) +
+            FfiConverterULong.allocationSize(value.`priceSats`) +
+            FfiConverterString.allocationSize(value.`assetId`) +
+            FfiConverterBoolean.allocationSize(value.`connected`) +
+            FfiConverterOptionalTypeConnectHintInfo.allocationSize(value.`connect`)
+    )
+
+    override fun write(value: PhoneQuoteInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`orderId`, buf)
+            FfiConverterULong.write(value.`priceSats`, buf)
+            FfiConverterString.write(value.`assetId`, buf)
+            FfiConverterBoolean.write(value.`connected`, buf)
+            FfiConverterOptionalTypeConnectHintInfo.write(value.`connect`, buf)
+    }
+}
+
+
+
+data class PhoneStageInfo (
+    /**
+     * awaiting_payment | awaiting_approval | paid | sms_sent | done
+     */
+    var `stage`: kotlin.String, 
+    var `txid`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePhoneStageInfo: FfiConverterRustBuffer<PhoneStageInfo> {
+    override fun read(buf: ByteBuffer): PhoneStageInfo {
+        return PhoneStageInfo(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PhoneStageInfo) = (
+            FfiConverterString.allocationSize(value.`stage`) +
+            FfiConverterOptionalString.allocationSize(value.`txid`)
+    )
+
+    override fun write(value: PhoneStageInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`stage`, buf)
+            FfiConverterOptionalString.write(value.`txid`, buf)
     }
 }
 
@@ -2185,6 +3054,42 @@ public object FfiConverterTypeTransactionSummary: FfiConverterRustBuffer<Transac
             FfiConverterSequenceTypeOutputSummary.write(value.`outputs`, buf)
             FfiConverterOptionalULong.write(value.`fee`, buf)
             FfiConverterBoolean.write(value.`fullyExplicit`, buf)
+    }
+}
+
+
+
+data class VerifyOutcomeInfo (
+    var `verified`: kotlin.Boolean, 
+    var `identityId`: kotlin.String?, 
+    var `txid`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeVerifyOutcomeInfo: FfiConverterRustBuffer<VerifyOutcomeInfo> {
+    override fun read(buf: ByteBuffer): VerifyOutcomeInfo {
+        return VerifyOutcomeInfo(
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: VerifyOutcomeInfo) = (
+            FfiConverterBoolean.allocationSize(value.`verified`) +
+            FfiConverterOptionalString.allocationSize(value.`identityId`) +
+            FfiConverterOptionalString.allocationSize(value.`txid`)
+    )
+
+    override fun write(value: VerifyOutcomeInfo, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`verified`, buf)
+            FfiConverterOptionalString.write(value.`identityId`, buf)
+            FfiConverterOptionalString.write(value.`txid`, buf)
     }
 }
 
@@ -2547,6 +3452,150 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeConnectHintInfo: FfiConverterRustBuffer<ConnectHintInfo?> {
+    override fun read(buf: ByteBuffer): ConnectHintInfo? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeConnectHintInfo.read(buf)
+    }
+
+    override fun allocationSize(value: ConnectHintInfo?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeConnectHintInfo.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ConnectHintInfo?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeConnectHintInfo.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceUInt: FfiConverterRustBuffer<List<kotlin.UInt>> {
+    override fun read(buf: ByteBuffer): List<kotlin.UInt> {
+        val len = buf.getInt()
+        return List<kotlin.UInt>(len) {
+            FfiConverterUInt.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.UInt>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterUInt.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.UInt>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterUInt.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeContactEntry: FfiConverterRustBuffer<List<ContactEntry>> {
+    override fun read(buf: ByteBuffer): List<ContactEntry> {
+        val len = buf.getInt()
+        return List<ContactEntry>(len) {
+            FfiConverterTypeContactEntry.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ContactEntry>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeContactEntry.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ContactEntry>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeContactEntry.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeContactInfo: FfiConverterRustBuffer<List<ContactInfo>> {
+    override fun read(buf: ByteBuffer): List<ContactInfo> {
+        val len = buf.getInt()
+        return List<ContactInfo>(len) {
+            FfiConverterTypeContactInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ContactInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeContactInfo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ContactInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeContactInfo.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeContactMatchInfo: FfiConverterRustBuffer<List<ContactMatchInfo>> {
+    override fun read(buf: ByteBuffer): List<ContactMatchInfo> {
+        val len = buf.getInt()
+        return List<ContactMatchInfo>(len) {
+            FfiConverterTypeContactMatchInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ContactMatchInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeContactMatchInfo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ContactMatchInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeContactMatchInfo.write(it, buf)
         }
     }
 }

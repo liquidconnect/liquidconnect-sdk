@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use lc_wallet_core::identity;
 use lc_wallet_core::key::WalletKey;
 use lc_wallet_core::transport;
 use lc_wallet_core::wire;
@@ -292,4 +293,233 @@ pub fn summarize_pset(
 #[uniffi::export]
 pub fn random_install_id_hex() -> String {
     wire::InstallId::random().to_string()
+}
+
+// --- identity -----------------------------------------------------------
+
+#[derive(uniffi::Record)]
+pub struct IdentityStatusInfo {
+    pub identity_id: Option<String>,
+    pub email: bool,
+    pub phone: bool,
+    pub handle: Option<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct VerifyOutcomeInfo {
+    pub verified: bool,
+    pub identity_id: Option<String>,
+    pub txid: Option<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct ConnectHintInfo {
+    pub request_id: String,
+    /// Open it like a scanned QR payload ([`LiquidConnectWallet::open_link`]).
+    pub link: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct PhoneQuoteInfo {
+    pub order_id: String,
+    pub price_sats: u64,
+    pub asset_id: String,
+    pub connected: bool,
+    /// Present when the wallet must approve a connection first.
+    pub connect: Option<ConnectHintInfo>,
+}
+
+#[derive(uniffi::Record)]
+pub struct PhoneStageInfo {
+    /// awaiting_payment | awaiting_approval | paid | sms_sent | done
+    pub stage: String,
+    pub txid: Option<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct ContactEntry {
+    pub channel: String,
+    pub value: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct ContactMatchInfo {
+    pub input_index: u32,
+    pub identity_id: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct DiscoverOutcomeInfo {
+    pub matched: Vec<ContactMatchInfo>,
+    pub unparsed_input_indexes: Vec<u32>,
+}
+
+#[derive(uniffi::Record)]
+pub struct ContactInfo {
+    pub identity_id: String,
+    pub handle: Option<String>,
+}
+
+fn verify_outcome_info(o: identity::VerifyOutcome) -> VerifyOutcomeInfo {
+    VerifyOutcomeInfo {
+        verified: o.verified,
+        identity_id: o.identity_id,
+        txid: o.txid,
+    }
+}
+
+/// The identity API for the connected wallet's user: verified email
+/// (free), verified phone (paid from the wallet itself as an ordinary
+/// sign request), contact discovery and pay-to-contact. Constructed
+/// from the same master blinding key as [`LiquidConnectWallet`], so it
+/// speaks as the same identity. Every call blocks on the network —
+/// call off the UI thread.
+#[derive(uniffi::Object)]
+pub struct IdentityService {
+    client: identity::IdentityClient,
+    key: WalletKey,
+}
+
+#[uniffi::export]
+impl IdentityService {
+    /// `base_url` ends at the route prefix — through the public gateway
+    /// that is `https://…/api/identity` — and `gateway_bearer` is the
+    /// deployment's front-door bearer when it has one. The wallet-key
+    /// signature inside every request is the caller's real
+    /// authentication either way.
+    #[uniffi::constructor]
+    pub fn new(
+        base_url: String,
+        gateway_bearer: Option<String>,
+        master_blinding_key: Vec<u8>,
+        network: Network,
+    ) -> Arc<Self> {
+        Arc::new(IdentityService {
+            client: identity::IdentityClient::new(base_url, gateway_bearer),
+            key: WalletKey::new(&master_blinding_key, network.into()),
+        })
+    }
+
+    pub fn status(&self) -> Result<IdentityStatusInfo, LcError> {
+        let s = self.client.status(&self.key)?;
+        Ok(IdentityStatusInfo {
+            identity_id: s.identity_id,
+            email: s.email,
+            phone: s.phone,
+            handle: s.handle,
+        })
+    }
+
+    pub fn email_start(&self, email: String) -> Result<(), LcError> {
+        self.client.email_start(&self.key, &email)?;
+        Ok(())
+    }
+
+    pub fn email_confirm(&self, email: String, code: String) -> Result<VerifyOutcomeInfo, LcError> {
+        Ok(verify_outcome_info(
+            self.client.email_confirm(&self.key, &email, &code)?,
+        ))
+    }
+
+    pub fn phone_start(&self, phone: String) -> Result<PhoneQuoteInfo, LcError> {
+        let q = self.client.phone_start(&self.key, &phone)?;
+        Ok(PhoneQuoteInfo {
+            order_id: q.order_id,
+            price_sats: q.price_sats,
+            asset_id: q.asset_id,
+            connected: q.connected,
+            connect: q.connect.map(|c| ConnectHintInfo {
+                request_id: c.request_id,
+                link: c.link,
+            }),
+        })
+    }
+
+    /// Puts the fee payment on the wallet as an ordinary sign request;
+    /// the user approves it on their own device. Nothing here handles
+    /// money.
+    pub fn phone_pay(&self, order_id: String) -> Result<(), LcError> {
+        self.client.phone_pay(&self.key, &order_id)?;
+        Ok(())
+    }
+
+    pub fn phone_status(&self, order_id: String) -> Result<PhoneStageInfo, LcError> {
+        let s = self.client.phone_status(&self.key, &order_id)?;
+        Ok(PhoneStageInfo {
+            stage: s.stage,
+            txid: s.txid,
+        })
+    }
+
+    pub fn phone_sms(&self, order_id: String) -> Result<(), LcError> {
+        self.client.phone_sms(&self.key, &order_id)?;
+        Ok(())
+    }
+
+    pub fn phone_confirm(
+        &self,
+        order_id: String,
+        code: String,
+    ) -> Result<VerifyOutcomeInfo, LcError> {
+        Ok(verify_outcome_info(
+            self.client.phone_confirm(&self.key, &order_id, &code)?,
+        ))
+    }
+
+    pub fn set_discoverability(
+        &self,
+        by_contact_hash: bool,
+        by_handle: bool,
+    ) -> Result<(), LcError> {
+        self.client
+            .set_discoverability(&self.key, by_contact_hash, by_handle)?;
+        Ok(())
+    }
+
+    pub fn contacts_discover(
+        &self,
+        contacts: Vec<ContactEntry>,
+    ) -> Result<DiscoverOutcomeInfo, LcError> {
+        let pairs: Vec<(String, String)> = contacts
+            .into_iter()
+            .map(|c| (c.channel, c.value))
+            .collect();
+        let o = self.client.contacts_discover(&self.key, &pairs)?;
+        Ok(DiscoverOutcomeInfo {
+            matched: o
+                .matched
+                .into_iter()
+                .map(|m| ContactMatchInfo {
+                    input_index: m.input_index as u32,
+                    identity_id: m.identity_id,
+                })
+                .collect(),
+            unparsed_input_indexes: o
+                .unparsed_input_indexes
+                .into_iter()
+                .map(|i| i as u32)
+                .collect(),
+        })
+    }
+
+    pub fn contacts_save(&self, channel: String, value: String) -> Result<(), LcError> {
+        self.client.contacts_save(&self.key, &channel, &value)?;
+        Ok(())
+    }
+
+    pub fn contacts_list(&self) -> Result<Vec<ContactInfo>, LcError> {
+        Ok(self
+            .client
+            .contacts_list(&self.key)?
+            .into_iter()
+            .map(|c| ContactInfo {
+                identity_id: c.identity_id,
+                handle: c.handle,
+            })
+            .collect())
+    }
+
+    pub fn contact_address(&self, identity_id: String) -> Result<String, LcError> {
+        Ok(self.client.contact_address(&self.key, &identity_id)?)
+    }
 }

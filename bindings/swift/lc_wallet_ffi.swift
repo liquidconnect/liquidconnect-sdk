@@ -522,6 +522,290 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 /**
+ * The identity API for the connected wallet's user: verified email
+ * (free), verified phone (paid from the wallet itself as an ordinary
+ * sign request), contact discovery and pay-to-contact. Constructed
+ * from the same master blinding key as [`LiquidConnectWallet`], so it
+ * speaks as the same identity. Every call blocks on the network —
+ * call off the UI thread.
+ */
+public protocol IdentityServiceProtocol: AnyObject, Sendable {
+    
+    func contactAddress(identityId: String) throws  -> String
+    
+    func contactsDiscover(contacts: [ContactEntry]) throws  -> DiscoverOutcomeInfo
+    
+    func contactsList() throws  -> [ContactInfo]
+    
+    func contactsSave(channel: String, value: String) throws 
+    
+    func emailConfirm(email: String, code: String) throws  -> VerifyOutcomeInfo
+    
+    func emailStart(email: String) throws 
+    
+    func phoneConfirm(orderId: String, code: String) throws  -> VerifyOutcomeInfo
+    
+    /**
+     * Puts the fee payment on the wallet as an ordinary sign request;
+     * the user approves it on their own device. Nothing here handles
+     * money.
+     */
+    func phonePay(orderId: String) throws 
+    
+    func phoneSms(orderId: String) throws 
+    
+    func phoneStart(phone: String) throws  -> PhoneQuoteInfo
+    
+    func phoneStatus(orderId: String) throws  -> PhoneStageInfo
+    
+    func setDiscoverability(byContactHash: Bool, byHandle: Bool) throws 
+    
+    func status() throws  -> IdentityStatusInfo
+    
+}
+/**
+ * The identity API for the connected wallet's user: verified email
+ * (free), verified phone (paid from the wallet itself as an ordinary
+ * sign request), contact discovery and pay-to-contact. Constructed
+ * from the same master blinding key as [`LiquidConnectWallet`], so it
+ * speaks as the same identity. Every call blocks on the network —
+ * call off the UI thread.
+ */
+open class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_lc_wallet_ffi_fn_clone_identityservice(self.pointer, $0) }
+    }
+    /**
+     * `base_url` ends at the route prefix — through the public gateway
+     * that is `https://…/api/identity` — and `gateway_bearer` is the
+     * deployment's front-door bearer when it has one. The wallet-key
+     * signature inside every request is the caller's real
+     * authentication either way.
+     */
+public convenience init(baseUrl: String, gatewayBearer: String?, masterBlindingKey: Data, network: Network) {
+    let pointer =
+        try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_constructor_identityservice_new(
+        FfiConverterString.lower(baseUrl),
+        FfiConverterOptionString.lower(gatewayBearer),
+        FfiConverterData.lower(masterBlindingKey),
+        FfiConverterTypeNetwork_lower(network),$0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_lc_wallet_ffi_fn_free_identityservice(pointer, $0) }
+    }
+
+    
+
+    
+open func contactAddress(identityId: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_contact_address(self.uniffiClonePointer(),
+        FfiConverterString.lower(identityId),$0
+    )
+})
+}
+    
+open func contactsDiscover(contacts: [ContactEntry])throws  -> DiscoverOutcomeInfo  {
+    return try  FfiConverterTypeDiscoverOutcomeInfo_lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_contacts_discover(self.uniffiClonePointer(),
+        FfiConverterSequenceTypeContactEntry.lower(contacts),$0
+    )
+})
+}
+    
+open func contactsList()throws  -> [ContactInfo]  {
+    return try  FfiConverterSequenceTypeContactInfo.lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_contacts_list(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func contactsSave(channel: String, value: String)throws   {try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_contacts_save(self.uniffiClonePointer(),
+        FfiConverterString.lower(channel),
+        FfiConverterString.lower(value),$0
+    )
+}
+}
+    
+open func emailConfirm(email: String, code: String)throws  -> VerifyOutcomeInfo  {
+    return try  FfiConverterTypeVerifyOutcomeInfo_lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_email_confirm(self.uniffiClonePointer(),
+        FfiConverterString.lower(email),
+        FfiConverterString.lower(code),$0
+    )
+})
+}
+    
+open func emailStart(email: String)throws   {try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_email_start(self.uniffiClonePointer(),
+        FfiConverterString.lower(email),$0
+    )
+}
+}
+    
+open func phoneConfirm(orderId: String, code: String)throws  -> VerifyOutcomeInfo  {
+    return try  FfiConverterTypeVerifyOutcomeInfo_lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_phone_confirm(self.uniffiClonePointer(),
+        FfiConverterString.lower(orderId),
+        FfiConverterString.lower(code),$0
+    )
+})
+}
+    
+    /**
+     * Puts the fee payment on the wallet as an ordinary sign request;
+     * the user approves it on their own device. Nothing here handles
+     * money.
+     */
+open func phonePay(orderId: String)throws   {try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_phone_pay(self.uniffiClonePointer(),
+        FfiConverterString.lower(orderId),$0
+    )
+}
+}
+    
+open func phoneSms(orderId: String)throws   {try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_phone_sms(self.uniffiClonePointer(),
+        FfiConverterString.lower(orderId),$0
+    )
+}
+}
+    
+open func phoneStart(phone: String)throws  -> PhoneQuoteInfo  {
+    return try  FfiConverterTypePhoneQuoteInfo_lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_phone_start(self.uniffiClonePointer(),
+        FfiConverterString.lower(phone),$0
+    )
+})
+}
+    
+open func phoneStatus(orderId: String)throws  -> PhoneStageInfo  {
+    return try  FfiConverterTypePhoneStageInfo_lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_phone_status(self.uniffiClonePointer(),
+        FfiConverterString.lower(orderId),$0
+    )
+})
+}
+    
+open func setDiscoverability(byContactHash: Bool, byHandle: Bool)throws   {try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_set_discoverability(self.uniffiClonePointer(),
+        FfiConverterBool.lower(byContactHash),
+        FfiConverterBool.lower(byHandle),$0
+    )
+}
+}
+    
+open func status()throws  -> IdentityStatusInfo  {
+    return try  FfiConverterTypeIdentityStatusInfo_lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_identityservice_status(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIdentityService: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = IdentityService
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> IdentityService {
+        return IdentityService(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: IdentityService) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IdentityService {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: IdentityService, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentityService_lift(_ pointer: UnsafeMutableRawPointer) throws -> IdentityService {
+    return try FfiConverterTypeIdentityService.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentityService_lower(_ value: IdentityService) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeIdentityService.lower(value)
+}
+
+
+
+
+
+
+/**
  * One connected wallet. Owns its runtime and its connection; drop it
  * (release it on the host side) to disconnect.
  */
@@ -915,6 +1199,448 @@ public func FfiConverterTypeWalletEventListener_lower(_ value: WalletEventListen
 
 
 
+public struct ConnectHintInfo {
+    public var requestId: String
+    /**
+     * Open it like a scanned QR payload ([`LiquidConnectWallet::open_link`]).
+     */
+    public var link: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requestId: String, 
+        /**
+         * Open it like a scanned QR payload ([`LiquidConnectWallet::open_link`]).
+         */link: String) {
+        self.requestId = requestId
+        self.link = link
+    }
+}
+
+#if compiler(>=6)
+extension ConnectHintInfo: Sendable {}
+#endif
+
+
+extension ConnectHintInfo: Equatable, Hashable {
+    public static func ==(lhs: ConnectHintInfo, rhs: ConnectHintInfo) -> Bool {
+        if lhs.requestId != rhs.requestId {
+            return false
+        }
+        if lhs.link != rhs.link {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(requestId)
+        hasher.combine(link)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeConnectHintInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConnectHintInfo {
+        return
+            try ConnectHintInfo(
+                requestId: FfiConverterString.read(from: &buf), 
+                link: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ConnectHintInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.requestId, into: &buf)
+        FfiConverterString.write(value.link, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConnectHintInfo_lift(_ buf: RustBuffer) throws -> ConnectHintInfo {
+    return try FfiConverterTypeConnectHintInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConnectHintInfo_lower(_ value: ConnectHintInfo) -> RustBuffer {
+    return FfiConverterTypeConnectHintInfo.lower(value)
+}
+
+
+public struct ContactEntry {
+    public var channel: String
+    public var value: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(channel: String, value: String) {
+        self.channel = channel
+        self.value = value
+    }
+}
+
+#if compiler(>=6)
+extension ContactEntry: Sendable {}
+#endif
+
+
+extension ContactEntry: Equatable, Hashable {
+    public static func ==(lhs: ContactEntry, rhs: ContactEntry) -> Bool {
+        if lhs.channel != rhs.channel {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(channel)
+        hasher.combine(value)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContactEntry: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContactEntry {
+        return
+            try ContactEntry(
+                channel: FfiConverterString.read(from: &buf), 
+                value: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ContactEntry, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.channel, into: &buf)
+        FfiConverterString.write(value.value, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContactEntry_lift(_ buf: RustBuffer) throws -> ContactEntry {
+    return try FfiConverterTypeContactEntry.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContactEntry_lower(_ value: ContactEntry) -> RustBuffer {
+    return FfiConverterTypeContactEntry.lower(value)
+}
+
+
+public struct ContactInfo {
+    public var identityId: String
+    public var handle: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(identityId: String, handle: String?) {
+        self.identityId = identityId
+        self.handle = handle
+    }
+}
+
+#if compiler(>=6)
+extension ContactInfo: Sendable {}
+#endif
+
+
+extension ContactInfo: Equatable, Hashable {
+    public static func ==(lhs: ContactInfo, rhs: ContactInfo) -> Bool {
+        if lhs.identityId != rhs.identityId {
+            return false
+        }
+        if lhs.handle != rhs.handle {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(identityId)
+        hasher.combine(handle)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContactInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContactInfo {
+        return
+            try ContactInfo(
+                identityId: FfiConverterString.read(from: &buf), 
+                handle: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ContactInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.identityId, into: &buf)
+        FfiConverterOptionString.write(value.handle, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContactInfo_lift(_ buf: RustBuffer) throws -> ContactInfo {
+    return try FfiConverterTypeContactInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContactInfo_lower(_ value: ContactInfo) -> RustBuffer {
+    return FfiConverterTypeContactInfo.lower(value)
+}
+
+
+public struct ContactMatchInfo {
+    public var inputIndex: UInt32
+    public var identityId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(inputIndex: UInt32, identityId: String) {
+        self.inputIndex = inputIndex
+        self.identityId = identityId
+    }
+}
+
+#if compiler(>=6)
+extension ContactMatchInfo: Sendable {}
+#endif
+
+
+extension ContactMatchInfo: Equatable, Hashable {
+    public static func ==(lhs: ContactMatchInfo, rhs: ContactMatchInfo) -> Bool {
+        if lhs.inputIndex != rhs.inputIndex {
+            return false
+        }
+        if lhs.identityId != rhs.identityId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(inputIndex)
+        hasher.combine(identityId)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContactMatchInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContactMatchInfo {
+        return
+            try ContactMatchInfo(
+                inputIndex: FfiConverterUInt32.read(from: &buf), 
+                identityId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ContactMatchInfo, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.inputIndex, into: &buf)
+        FfiConverterString.write(value.identityId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContactMatchInfo_lift(_ buf: RustBuffer) throws -> ContactMatchInfo {
+    return try FfiConverterTypeContactMatchInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContactMatchInfo_lower(_ value: ContactMatchInfo) -> RustBuffer {
+    return FfiConverterTypeContactMatchInfo.lower(value)
+}
+
+
+public struct DiscoverOutcomeInfo {
+    public var matched: [ContactMatchInfo]
+    public var unparsedInputIndexes: [UInt32]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(matched: [ContactMatchInfo], unparsedInputIndexes: [UInt32]) {
+        self.matched = matched
+        self.unparsedInputIndexes = unparsedInputIndexes
+    }
+}
+
+#if compiler(>=6)
+extension DiscoverOutcomeInfo: Sendable {}
+#endif
+
+
+extension DiscoverOutcomeInfo: Equatable, Hashable {
+    public static func ==(lhs: DiscoverOutcomeInfo, rhs: DiscoverOutcomeInfo) -> Bool {
+        if lhs.matched != rhs.matched {
+            return false
+        }
+        if lhs.unparsedInputIndexes != rhs.unparsedInputIndexes {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(matched)
+        hasher.combine(unparsedInputIndexes)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDiscoverOutcomeInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DiscoverOutcomeInfo {
+        return
+            try DiscoverOutcomeInfo(
+                matched: FfiConverterSequenceTypeContactMatchInfo.read(from: &buf), 
+                unparsedInputIndexes: FfiConverterSequenceUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DiscoverOutcomeInfo, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeContactMatchInfo.write(value.matched, into: &buf)
+        FfiConverterSequenceUInt32.write(value.unparsedInputIndexes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDiscoverOutcomeInfo_lift(_ buf: RustBuffer) throws -> DiscoverOutcomeInfo {
+    return try FfiConverterTypeDiscoverOutcomeInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDiscoverOutcomeInfo_lower(_ value: DiscoverOutcomeInfo) -> RustBuffer {
+    return FfiConverterTypeDiscoverOutcomeInfo.lower(value)
+}
+
+
+public struct IdentityStatusInfo {
+    public var identityId: String?
+    public var email: Bool
+    public var phone: Bool
+    public var handle: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(identityId: String?, email: Bool, phone: Bool, handle: String?) {
+        self.identityId = identityId
+        self.email = email
+        self.phone = phone
+        self.handle = handle
+    }
+}
+
+#if compiler(>=6)
+extension IdentityStatusInfo: Sendable {}
+#endif
+
+
+extension IdentityStatusInfo: Equatable, Hashable {
+    public static func ==(lhs: IdentityStatusInfo, rhs: IdentityStatusInfo) -> Bool {
+        if lhs.identityId != rhs.identityId {
+            return false
+        }
+        if lhs.email != rhs.email {
+            return false
+        }
+        if lhs.phone != rhs.phone {
+            return false
+        }
+        if lhs.handle != rhs.handle {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(identityId)
+        hasher.combine(email)
+        hasher.combine(phone)
+        hasher.combine(handle)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIdentityStatusInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IdentityStatusInfo {
+        return
+            try IdentityStatusInfo(
+                identityId: FfiConverterOptionString.read(from: &buf), 
+                email: FfiConverterBool.read(from: &buf), 
+                phone: FfiConverterBool.read(from: &buf), 
+                handle: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: IdentityStatusInfo, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.identityId, into: &buf)
+        FfiConverterBool.write(value.email, into: &buf)
+        FfiConverterBool.write(value.phone, into: &buf)
+        FfiConverterOptionString.write(value.handle, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentityStatusInfo_lift(_ buf: RustBuffer) throws -> IdentityStatusInfo {
+    return try FfiConverterTypeIdentityStatusInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentityStatusInfo_lower(_ value: IdentityStatusInfo) -> RustBuffer {
+    return FfiConverterTypeIdentityStatusInfo.lower(value)
+}
+
+
 public struct LoginRequestInfo {
     public var requestId: String
     public var domain: String
@@ -1100,6 +1826,182 @@ public func FfiConverterTypeOutputSummary_lift(_ buf: RustBuffer) throws -> Outp
 #endif
 public func FfiConverterTypeOutputSummary_lower(_ value: OutputSummary) -> RustBuffer {
     return FfiConverterTypeOutputSummary.lower(value)
+}
+
+
+public struct PhoneQuoteInfo {
+    public var orderId: String
+    public var priceSats: UInt64
+    public var assetId: String
+    public var connected: Bool
+    /**
+     * Present when the wallet must approve a connection first.
+     */
+    public var connect: ConnectHintInfo?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(orderId: String, priceSats: UInt64, assetId: String, connected: Bool, 
+        /**
+         * Present when the wallet must approve a connection first.
+         */connect: ConnectHintInfo?) {
+        self.orderId = orderId
+        self.priceSats = priceSats
+        self.assetId = assetId
+        self.connected = connected
+        self.connect = connect
+    }
+}
+
+#if compiler(>=6)
+extension PhoneQuoteInfo: Sendable {}
+#endif
+
+
+extension PhoneQuoteInfo: Equatable, Hashable {
+    public static func ==(lhs: PhoneQuoteInfo, rhs: PhoneQuoteInfo) -> Bool {
+        if lhs.orderId != rhs.orderId {
+            return false
+        }
+        if lhs.priceSats != rhs.priceSats {
+            return false
+        }
+        if lhs.assetId != rhs.assetId {
+            return false
+        }
+        if lhs.connected != rhs.connected {
+            return false
+        }
+        if lhs.connect != rhs.connect {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(orderId)
+        hasher.combine(priceSats)
+        hasher.combine(assetId)
+        hasher.combine(connected)
+        hasher.combine(connect)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePhoneQuoteInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PhoneQuoteInfo {
+        return
+            try PhoneQuoteInfo(
+                orderId: FfiConverterString.read(from: &buf), 
+                priceSats: FfiConverterUInt64.read(from: &buf), 
+                assetId: FfiConverterString.read(from: &buf), 
+                connected: FfiConverterBool.read(from: &buf), 
+                connect: FfiConverterOptionTypeConnectHintInfo.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PhoneQuoteInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.orderId, into: &buf)
+        FfiConverterUInt64.write(value.priceSats, into: &buf)
+        FfiConverterString.write(value.assetId, into: &buf)
+        FfiConverterBool.write(value.connected, into: &buf)
+        FfiConverterOptionTypeConnectHintInfo.write(value.connect, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePhoneQuoteInfo_lift(_ buf: RustBuffer) throws -> PhoneQuoteInfo {
+    return try FfiConverterTypePhoneQuoteInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePhoneQuoteInfo_lower(_ value: PhoneQuoteInfo) -> RustBuffer {
+    return FfiConverterTypePhoneQuoteInfo.lower(value)
+}
+
+
+public struct PhoneStageInfo {
+    /**
+     * awaiting_payment | awaiting_approval | paid | sms_sent | done
+     */
+    public var stage: String
+    public var txid: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * awaiting_payment | awaiting_approval | paid | sms_sent | done
+         */stage: String, txid: String?) {
+        self.stage = stage
+        self.txid = txid
+    }
+}
+
+#if compiler(>=6)
+extension PhoneStageInfo: Sendable {}
+#endif
+
+
+extension PhoneStageInfo: Equatable, Hashable {
+    public static func ==(lhs: PhoneStageInfo, rhs: PhoneStageInfo) -> Bool {
+        if lhs.stage != rhs.stage {
+            return false
+        }
+        if lhs.txid != rhs.txid {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(stage)
+        hasher.combine(txid)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePhoneStageInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PhoneStageInfo {
+        return
+            try PhoneStageInfo(
+                stage: FfiConverterString.read(from: &buf), 
+                txid: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PhoneStageInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.stage, into: &buf)
+        FfiConverterOptionString.write(value.txid, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePhoneStageInfo_lift(_ buf: RustBuffer) throws -> PhoneStageInfo {
+    return try FfiConverterTypePhoneStageInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePhoneStageInfo_lower(_ value: PhoneStageInfo) -> RustBuffer {
+    return FfiConverterTypePhoneStageInfo.lower(value)
 }
 
 
@@ -1360,6 +2262,84 @@ public func FfiConverterTypeTransactionSummary_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeTransactionSummary_lower(_ value: TransactionSummary) -> RustBuffer {
     return FfiConverterTypeTransactionSummary.lower(value)
+}
+
+
+public struct VerifyOutcomeInfo {
+    public var verified: Bool
+    public var identityId: String?
+    public var txid: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(verified: Bool, identityId: String?, txid: String?) {
+        self.verified = verified
+        self.identityId = identityId
+        self.txid = txid
+    }
+}
+
+#if compiler(>=6)
+extension VerifyOutcomeInfo: Sendable {}
+#endif
+
+
+extension VerifyOutcomeInfo: Equatable, Hashable {
+    public static func ==(lhs: VerifyOutcomeInfo, rhs: VerifyOutcomeInfo) -> Bool {
+        if lhs.verified != rhs.verified {
+            return false
+        }
+        if lhs.identityId != rhs.identityId {
+            return false
+        }
+        if lhs.txid != rhs.txid {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(verified)
+        hasher.combine(identityId)
+        hasher.combine(txid)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVerifyOutcomeInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VerifyOutcomeInfo {
+        return
+            try VerifyOutcomeInfo(
+                verified: FfiConverterBool.read(from: &buf), 
+                identityId: FfiConverterOptionString.read(from: &buf), 
+                txid: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VerifyOutcomeInfo, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.verified, into: &buf)
+        FfiConverterOptionString.write(value.identityId, into: &buf)
+        FfiConverterOptionString.write(value.txid, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVerifyOutcomeInfo_lift(_ buf: RustBuffer) throws -> VerifyOutcomeInfo {
+    return try FfiConverterTypeVerifyOutcomeInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVerifyOutcomeInfo_lower(_ value: VerifyOutcomeInfo) -> RustBuffer {
+    return FfiConverterTypeVerifyOutcomeInfo.lower(value)
 }
 
 
@@ -1720,6 +2700,130 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeConnectHintInfo: FfiConverterRustBuffer {
+    typealias SwiftType = ConnectHintInfo?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeConnectHintInfo.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeConnectHintInfo.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt32]
+
+    public static func write(_ value: [UInt32], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt32.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt32] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt32]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt32.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeContactEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [ContactEntry]
+
+    public static func write(_ value: [ContactEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeContactEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ContactEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ContactEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeContactEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeContactInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [ContactInfo]
+
+    public static func write(_ value: [ContactInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeContactInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ContactInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ContactInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeContactInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeContactMatchInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [ContactMatchInfo]
+
+    public static func write(_ value: [ContactMatchInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeContactMatchInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ContactMatchInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ContactMatchInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeContactMatchInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeOutputSummary: FfiConverterRustBuffer {
     typealias SwiftType = [OutputSummary]
 
@@ -1814,6 +2918,45 @@ private let initializationResult: InitializationResult = {
     if (uniffi_lc_wallet_ffi_checksum_func_summarize_pset() != 50125) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address() != 51379) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_discover() != 18815) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_list() != 43234) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_save() != 36582) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_email_confirm() != 56574) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_email_start() != 41977) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_confirm() != 25370) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_pay() != 46194) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_sms() != 26687) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_start() != 27862) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_phone_status() != 60661) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_set_discoverability() != 56657) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_identityservice_status() != 59905) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_login() != 52278) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1836,6 +2979,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_walleteventlistener_on_event() != 25536) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_constructor_identityservice_new() != 63506) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new() != 29879) {
