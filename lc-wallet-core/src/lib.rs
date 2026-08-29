@@ -7,6 +7,8 @@
 //! - [`key`] — the wallet's Connect identity: an x-only key derived from
 //!   the master blinding key and a network salt; challenge-login signing.
 //! - [`link`] — QR payload / app-link parsing (`liquidconnect://…`).
+//! - [`venue`] — Rolling Future venue digests (rf/order/v1 etc.) and
+//!   wallet-key signing of them.
 //! - [`core`] — the sans-io session state machine: inputs in, effects
 //!   out, no sockets or clocks. Bring your own transport, or:
 //! - [`transport`] *(feature `transport`, default on)* — a tokio driver
@@ -29,6 +31,7 @@ pub mod identity;
 pub mod key;
 pub mod link;
 pub mod payjoin;
+pub mod venue;
 #[cfg(feature = "transport")]
 pub mod transport;
 pub mod wire;

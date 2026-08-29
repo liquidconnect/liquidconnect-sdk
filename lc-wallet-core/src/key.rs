@@ -108,6 +108,14 @@ impl WalletKey {
         SECP256K1.sign_schnorr(&message, &self.keypair)
     }
 
+    /// BIP340 over a raw 32-byte digest, deterministic (no aux
+    /// randomness), so signatures are vector-testable. The venue/covenant
+    /// signing primitive (see [`crate::venue`]) — and the exact operation
+    /// a `StartSignMessage`-style Connect request will perform.
+    pub fn sign_digest(&self, digest: [u8; 32]) -> secp256k1_zkp::schnorr::Signature {
+        SECP256K1.sign_schnorr_no_aux_rand(&Message::from_digest(digest), &self.keypair)
+    }
+
     /// Sign an identity-API operation. See [`identity_auth_message`].
     pub fn sign_identity(
         &self,
