@@ -272,7 +272,10 @@ mod tests {
     fn venue_key_derivation_vectors() {
         let testnet = VenueKey::from_seed(&[7u8; 32], Network::LiquidTestnet).unwrap();
         let mainnet = VenueKey::from_seed(&[7u8; 32], Network::Liquid).unwrap();
-        assert_eq!(hex(&testnet.public_key().serialize()), "PIN_TESTNET");
+        assert_eq!(
+            hex(&testnet.public_key().serialize()),
+            "849904e240e9eb333f1d7889a4ec9b318ab19a877c929728aa511046618b5c33"
+        );
         assert_eq!(hex(&mainnet.public_key().serialize()), "PIN_MAINNET");
     }
 
@@ -287,7 +290,7 @@ mod tests {
         assert_eq!((d, s), (d2, s2));
         // byte-stable — the property the rf-vectors example (the venue
         // signing test vectors) relies on
-        assert_eq!(hex(&d), "PIN_DIGEST");
+        assert_eq!(hex(&d), "c1e1213719d7a48a911642992a41f0e4e26bd1fdf446394bb7777b98b2fb749b");
         assert_eq!(s.to_string(), "PIN_SIG");
         assert!(SECP256K1
             .verify_schnorr(&s, &Message::from_digest(d), &key.public_key())
