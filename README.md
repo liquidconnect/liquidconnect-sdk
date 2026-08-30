@@ -64,13 +64,13 @@ then open https://test.liquidconnect.io, start a connection, and `link` the `req
 | Module | What it is |
 | --- | --- |
 | `wire` | The wallet-side wire protocol, frame shapes pinned by tests |
-| `key` | Connect identity key + challenge-login signing |
+| `key` | Connect identity key + challenge-login signing — mbk-derived, deliberately never spend-class |
 | `link` | `liquidconnect://` / app-link parsing |
 | `core` | Sans-io session state machine — bring your own transport if you have one |
 | `transport` | Ready-made tokio transport (default feature) |
 | `approval` | A sign request's PSET as structure to render, honest about confidential fields; payjoin-aware annotation |
 | `payjoin` | Client for SideSwap's payjoin service: pay network fees in USDt, no L-BTC needed |
-| `venue` | Rolling Future covenant-digest builders and wallet-key signing (`rf/order/v1`, `rf/withdraw/v1`, `rf/login/v1`) - vectors pinned against the venue server |
+| `venue` | Rolling Future venue: the seed-derived money key (`VenueKey`, hardened path m/19523'/net'/0'), covenant-digest builders and typed signing (`rf/order/v1`, `rf/withdraw/v1`, `rf/login/v1`) - vectors pinned against the venue server |
 
 ## Flutter
 
@@ -95,7 +95,7 @@ cargo run --example payjoin-probe
 
 ## What this SDK will never do
 
-Hold keys, sign transactions, or approve anything. The wallet signs with its own machinery after its own verification. `approval::summarize_pset` reports exactly what is explicit in a PSET and marks everything else `confidential` — when `fully_explicit` is false, your own decode must fill the gaps before a person is asked to approve.
+Hold your wallet's keys, sign transactions, or approve anything. The wallet signs with its own machinery after its own verification. Two narrow, deliberate exceptions, each a dedicated key the SDK derives itself: the Connect identity key (`key::WalletKey`, mbk-derived, signs logins and identity calls — never money, because the master blinding key is view-tier material) and the venue money key (`venue::VenueKey`, seed-derived on its own hardened path, signing only typed `rf/*` digests the SDK builds itself — there is no sign-arbitrary-bytes entry point, so a transaction sighash can never be smuggled in as "a message"). Wallets with hardware-custodied seeds skip `VenueKey` and sign the public digest builders' output in their own signer. `approval::summarize_pset` reports exactly what is explicit in a PSET and marks everything else `confidential` — when `fully_explicit` is false, your own decode must fill the gaps before a person is asked to approve.
 
 ## Protocol references
 

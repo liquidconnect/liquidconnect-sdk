@@ -12,19 +12,37 @@ The SDK was extracted from the SideSwap wallet's own Connect code
 Liquid wallet can embed. History is preserved so a PR upstream remains
 possible; until then the repo is private and standalone.
 
-The one rule everything else follows from: **the SDK never holds keys,
-never signs, never approves**. It renders, verifies shape, and carries
-messages. The host wallet signs with its own machinery after its own
-verification. If a change would give the SDK a signing path, it is the
-wrong change.
+The one rule everything else follows from: **the SDK never holds the
+wallet's keys, never signs transactions, never approves**. It renders,
+verifies shape, and carries messages. The host wallet signs with its own
+machinery after its own verification. The SDK does own two keys of its
+own — the Connect identity key and the venue money key, next section —
+and each signs only typed, domain-tagged digests built inside the SDK.
+If a change would let arbitrary caller-supplied bytes reach either key,
+it is the wrong change.
 
-## The identity key — and the trap on both its sides
+## The two keys, and the boundary between them
 
 `key::WalletKey` derives the wallet's identity from the master blinding
 key plus a per-network salt: nothing new to back up, different identity
 per network. The x-only public key **is** the identity — for Connect
 logins and for the identity API alike, which is why a key-proved
 identity and a login-bound one land on the same server-side record.
+
+The mbk is **view-tier** material — wallets export it to watch-only
+servers and explorers so third parties can see without spending — so a
+key derived from it must never control funds. That is the boundary:
+`WalletKey` signs logins and identity calls only, and has no raw
+digest-signing entry point. Spend-class signing for the Rolling Future
+venue uses `venue::VenueKey`, derived from the wallet **seed** via the
+dedicated hardened path `m/19523'/<network>'/0'` (19523 = 0x4C43,
+"LC"); its raw signer is private, so the typed `rf/*` builders are the
+only way to a signature. Wallets whose seed lives in a hardware signer
+cannot build a `VenueKey` — for them the public digest builders are the
+integration surface and the signature is produced in the signer. (Until
+2026-08-30 `venue` signed with the identity key; venue accounts keyed
+that way are separate accounts under the new derivation — testnet-only
+state existed at the switch, migrated by withdraw-and-redeposit.)
 
 Cross-repo pinned invariants — the SDK is now one side of pins in
 **three** repos (`agentic-wallet-server` for identity,
@@ -39,8 +57,10 @@ Cross-repo pinned invariants — the SDK is now one side of pins in
   (`to_byte_array`/`Message::as_ref`), not `Display` — hash newtypes may
   render byte-reversed and the strings will lie to you.
 - `venue` builds the Rolling Future covenant digests (`rf/*`) from typed
-  fields and signs them with `WalletKey::sign_digest`; the vectors are
-  pinned identically in `rolling-future/server`. External services keep
+  fields and signs them with the seed-derived `venue::VenueKey`; the
+  digest vectors are pinned identically in `rolling-future/server`, and
+  the derivation vector is pinned in `venue.rs` so an independent
+  implementation lands on the same account key. External services keep
   arriving as consumers of this signing surface — TetherSwap intends to
   verify LC-produced signatures **server-side** (pipe-closure signatures
   on Liquid destination addresses), so keep digest building and signing

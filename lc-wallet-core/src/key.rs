@@ -1,4 +1,4 @@
-//! The wallet's Liquid Connect identity key.
+//! The wallet's Liquid Connect identity key — login and identity API only.
 //!
 //! Vendored from `sideswap-io/sideswap_rust` (`sideswap_common/src/wallet_key.rs`,
 //! MIT). The x-only public key of this keypair IS the wallet's identity on the
@@ -7,6 +7,18 @@
 //! key and a per-network salt, so the same wallet presents the same identity
 //! across app reinstalls without a second secret to back up, and presents
 //! different identities on different networks.
+//!
+//! ## Scope: identity, never money
+//!
+//! The master blinding key is view-tier material in the Liquid model:
+//! wallets export it to watch-only servers and block explorers precisely
+//! so third parties can *see* transactions without being able to *spend*.
+//! A key derived from it must therefore never control funds — everyone
+//! who has ever been handed the mbk can re-derive it. This key signs
+//! Connect logins and identity-API calls, nothing else, and deliberately
+//! has no raw digest-signing entry point. Spend-class signing (the
+//! Rolling Future venue) uses [`crate::venue::VenueKey`], derived from
+//! the wallet seed on its own hardened path instead.
 
 use elements::bitcoin::{self, secp256k1::Message};
 use elements::hashes::{Hash, HashEngine};
@@ -106,14 +118,6 @@ impl WalletKey {
     pub fn sign_challenge(&self, challenge: &str) -> secp256k1_zkp::schnorr::Signature {
         let message = get_sign_message_hash(challenge);
         SECP256K1.sign_schnorr(&message, &self.keypair)
-    }
-
-    /// BIP340 over a raw 32-byte digest, deterministic (no aux
-    /// randomness), so signatures are vector-testable. The venue/covenant
-    /// signing primitive (see [`crate::venue`]) — and the exact operation
-    /// a `StartSignMessage`-style Connect request will perform.
-    pub fn sign_digest(&self, digest: [u8; 32]) -> secp256k1_zkp::schnorr::Signature {
-        SECP256K1.sign_schnorr_no_aux_rand(&Message::from_digest(digest), &self.keypair)
     }
 
     /// Sign an identity-API operation. See [`identity_auth_message`].

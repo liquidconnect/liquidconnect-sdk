@@ -1,28 +1,31 @@
-//! Test vectors for the `StartSignMessage` ask (Liquid Connect message
-//! signing): a deterministic wallet key signs the Rolling Future venue's
-//! rf/* digests exactly as [`lc_wallet_core::venue`] does, so a protocol
-//! implementation can be checked against known-good signatures.
+//! Test vectors for venue signing (and for checking any
+//! `StartSignMessage`-style protocol implementation against known-good
+//! signatures): a deterministic venue money key signs the Rolling Future
+//! venue's rf/* digests exactly as [`lc_wallet_core::venue`] does.
 //!
 //!     cargo run --example rf-vectors
 //!
 //! Everything printed is reproducible: the key derives from the fixed
-//! master blinding key below (WalletKey::new — sk = tagged
-//! SHA256("sideswap/wallet_key", testnet_salt || mbk)), and signing is
-//! BIP340 with NO aux randomness, so the signatures are byte-stable.
+//! wallet seed below via the SDK's production derivation
+//! (VenueKey::from_seed — BIP32 hardened path m/19523'/1'/0' on Liquid
+//! testnet, from BIP32-master(seed)), and signing is BIP340 with NO aux
+//! randomness, so the signatures are byte-stable. Note the venue key is
+//! deliberately NOT the Connect identity key: it is seed-derived, never
+//! derivable from the master blinding key.
 
-use lc_wallet_core::key::{Network, WalletKey};
+use lc_wallet_core::key::Network;
 use lc_wallet_core::venue::{
     login_digest, order_digest, p2tr_spk_hash, sign_login, sign_order, sign_withdraw,
-    withdraw_digest, OrderSide,
+    withdraw_digest, OrderSide, VenueKey,
 };
 
 fn main() {
-    let mbk = [7u8; 32];
-    let key = WalletKey::new(&mbk, Network::LiquidTestnet);
+    let seed = [7u8; 32];
+    let key = VenueKey::from_seed(&seed, Network::LiquidTestnet).expect("seed is valid");
     let pk = key.public_key().serialize();
     println!("network                : Liquid testnet");
-    println!("master blinding key    : {}", hex::encode(mbk));
-    println!("wallet pk (x-only)     : {}", hex::encode(pk));
+    println!("wallet seed            : {}", hex::encode(seed));
+    println!("venue pk (x-only)      : {}", hex::encode(pk));
     println!();
 
     let (d, s) = sign_login(&key, "c1");

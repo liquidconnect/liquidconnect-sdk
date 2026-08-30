@@ -8,12 +8,15 @@
 //!
 //!     cargo run --example rf-venue-e2e -- <seedA-hex-32> <seedB-hex-32> [base-url]
 //!
-//! base-url defaults to https://paper.swaption.io. Seeds are master
-//! blinding keys (the wallet identity is deterministic from them, like a
-//! real wallet's).
+//! base-url defaults to https://paper.swaption.io. Seeds are wallet
+//! seeds: each account key is the seed's venue money key
+//! (VenueKey::from_seed, hardened path m/19523'/1'/0'), deterministic
+//! like a real wallet's — and deliberately not the Connect identity key.
 
-use lc_wallet_core::key::{Network, WalletKey};
-use lc_wallet_core::venue::{sign_login, sign_order, sign_withdraw, withdraw_digest, OrderSide};
+use lc_wallet_core::key::Network;
+use lc_wallet_core::venue::{
+    sign_login, sign_order, sign_withdraw, withdraw_digest, OrderSide, VenueKey,
+};
 
 struct Venue {
     base: String,
@@ -47,7 +50,7 @@ fn dec(raw: u64) -> String {
     format!("{}.{:08}", raw / 100_000_000, raw % 100_000_000)
 }
 
-fn login(v: &Venue, key: &WalletKey, label: &str) -> anyhow::Result<(String, u64)> {
+fn login(v: &Venue, key: &VenueKey, label: &str) -> anyhow::Result<(String, u64)> {
     let ch = v.post("/api/sdk/challenge", &[])?;
     let challenge = ch["challenge"].as_str().expect("challenge").to_string();
     let (_digest, sig) = sign_login(key, &challenge);
@@ -67,7 +70,7 @@ fn login(v: &Venue, key: &WalletKey, label: &str) -> anyhow::Result<(String, u64
 
 fn signed_order(
     v: &Venue,
-    key: &WalletKey,
+    key: &VenueKey,
     token: &str,
     side: OrderSide,
     price_raw: u64,
@@ -111,7 +114,7 @@ fn signed_order(
 
 fn signed_withdraw(
     v: &Venue,
-    key: &WalletKey,
+    key: &VenueKey,
     token: &str,
     amt_raw: u64,
 ) -> anyhow::Result<()> {
@@ -168,8 +171,8 @@ fn main() -> anyhow::Result<()> {
     let base = args.next().unwrap_or_else(|| "https://paper.swaption.io".to_string());
     let v = Venue { base };
 
-    let key_a = WalletKey::new(&seed_a, Network::LiquidTestnet);
-    let key_b = WalletKey::new(&seed_b, Network::LiquidTestnet);
+    let key_a = VenueKey::from_seed(&seed_a, Network::LiquidTestnet)?;
+    let key_b = VenueKey::from_seed(&seed_b, Network::LiquidTestnet)?;
     let (tok_a, _) = login(&v, &key_a, "wallet A")?;
     let (tok_b, _) = login(&v, &key_b, "wallet B")?;
 

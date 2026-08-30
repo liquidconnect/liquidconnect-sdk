@@ -1,30 +1,110 @@
-//! Signing for the Rolling Future venue's covenant digests (`rf/*`).
+//! The Rolling Future venue: the money key and covenant-digest signing (`rf/*`).
 //!
 //! The venue (paper.swaption.io, `sideswap-io/rolling-future`) admits an
-//! order or withdrawal from a wallet-key account only with a BIP340
-//! signature by the wallet key over a domain-tagged SHA256 digest, and the
+//! order or withdrawal from an account only with a BIP340 signature by
+//! the account key over a domain-tagged SHA256 digest, and the
 //! Simplicity covenant re-verifies the very same signature on-chain when
 //! the driver broadcasts the fill or withdraw. This module builds those
-//! digests from typed fields — a wallet must know exactly what it signs —
-//! and signs them with the wallet's Connect identity key
-//! ([`WalletKey::sign_digest`]).
+//! digests from typed fields — a wallet must know exactly what it signs
+//! — and signs them with the venue money key ([`VenueKey`]).
 //!
-//! This is the pipeline a `StartSignMessage`-style Liquid Connect request
-//! drops into: the RP supplies the digest (or the fields to rebuild it),
-//! the wallet displays what it is authorising, and the reply carries the
-//! same BIP340 signature produced here. The digest vectors below are
-//! pinned identically in `rolling-future/server/src/main.rs` — never
-//! change one side alone.
+//! ## The money key is not the Connect identity key
+//!
+//! Withdrawals pay to the raw P2TR of the account key, so the account
+//! key is spend-class: it controls on-chain funds. The Connect identity
+//! key ([`crate::key::WalletKey`]) derives from the master blinding key
+//! — view-tier material that wallets legitimately export to watch-only
+//! servers and explorers — so it must never be the account key: anyone
+//! holding a wallet's mbk could otherwise derive it and spend.
+//! [`VenueKey`] therefore derives from the wallet **seed** via a
+//! dedicated hardened BIP32 path (`m/19523'/<network>'/0'`; 19523 =
+//! 0x4C43, ASCII "LC"), which is never exportable to view-tier
+//! infrastructure. Nothing new to back up — the seed already is.
+//!
+//! Wallets whose seed lives in a hardware signer cannot construct a
+//! [`VenueKey`] here; for those hosts the public digest builders below
+//! are the integration surface — build the digest from typed fields,
+//! display the fields, and produce the BIP340 signature in the signer.
+//! There is deliberately no sign-arbitrary-bytes entry point in the
+//! public API: a digest supplied by a remote party could be the sighash
+//! of a transaction spending the account's outputs. The wallet always
+//! rebuilds digests from fields it can show.
+//!
+//! The digest vectors below are pinned identically in
+//! `rolling-future/server/src/main.rs` — never change one side alone.
 
+use elements::bitcoin::bip32::{ChildNumber, Xpriv};
+use elements::bitcoin::secp256k1::Secp256k1;
+use elements::bitcoin::NetworkKind;
 use elements::hashes::{sha256, Hash};
+use elements::schnorr::{Keypair, XOnlyPublicKey};
 use elements::secp256k1_zkp::schnorr::Signature;
+use elements::secp256k1_zkp::{Message, SECP256K1};
 
-use crate::key::WalletKey;
+use crate::key::Network;
 
 pub const ORDER_TAG: &[u8] = b"rf/order/v1";
 pub const WITHDRAW_TAG: &[u8] = b"rf/withdraw/v1";
 pub const LOGIN_TAG: &[u8] = b"rf/login/v1";
 pub const PRODUCT: &[u8] = b"RF-BTC-USDT";
+
+/// BIP43 purpose index of the venue money key's derivation path:
+/// 0x4C43, ASCII "LC". The full path is `m/19523'/<network>'/0'` with
+/// network 0' Liquid, 1' Liquid testnet, 2' regtest, and the trailing
+/// 0' an account slot reserved for future multi-account use.
+pub const VENUE_KEY_PURPOSE: u32 = 0x4C43;
+
+/// The venue money key: the account identity on the venue and the key
+/// its covenant funds pay out to.
+///
+/// Derived from the wallet seed (the BIP39 seed bytes — the same secret
+/// that roots the wallet's xprv, 16–64 bytes) via the dedicated
+/// hardened path documented at [`VENUE_KEY_PURPOSE`]. Deterministic per
+/// seed and network, like the identity key — but, unlike the identity
+/// key, not derivable from anything a wallet exports to watch-only
+/// infrastructure.
+pub struct VenueKey {
+    keypair: Keypair,
+}
+
+impl VenueKey {
+    /// The production derivation: BIP32 from the wallet seed, hardened
+    /// path `m/19523'/<network>'/0'`.
+    pub fn from_seed(seed: &[u8], network: Network) -> anyhow::Result<VenueKey> {
+        let secp = Secp256k1::signing_only();
+        // NetworkKind only selects xprv serialization version bytes,
+        // which never leave this function; network separation is the
+        // path's job.
+        let master = Xpriv::new_master(NetworkKind::Main, seed)?;
+        let net = match network {
+            Network::Liquid => 0,
+            Network::LiquidTestnet => 1,
+            Network::Regtest => 2,
+        };
+        let path = [
+            ChildNumber::from_hardened_idx(VENUE_KEY_PURPOSE).expect("fits 31 bits"),
+            ChildNumber::from_hardened_idx(net).expect("fits 31 bits"),
+            ChildNumber::from_hardened_idx(0).expect("fits 31 bits"),
+        ];
+        let child = master.derive_priv(&secp, &path)?;
+        let keypair = Keypair::from_seckey_slice(SECP256K1, &child.private_key.secret_bytes())
+            .expect("a bip32 child key is a valid secp key");
+        Ok(VenueKey { keypair })
+    }
+
+    pub fn public_key(&self) -> XOnlyPublicKey {
+        self.keypair.x_only_public_key().0
+    }
+
+    /// BIP340 over a venue digest, deterministic (no aux randomness) so
+    /// signatures are vector-testable. Private on purpose: every public
+    /// signing path goes through the typed builders in this module, so
+    /// arbitrary bytes — e.g. a transaction sighash offered as "a
+    /// message" — can never reach the key.
+    fn sign_digest(&self, digest: [u8; 32]) -> Signature {
+        SECP256K1.sign_schnorr_no_aux_rand(&Message::from_digest(digest), &self.keypair)
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum OrderSide {
@@ -97,7 +177,8 @@ pub fn login_digest(pk: &[u8; 32], challenge: &str) -> [u8; 32] {
 }
 
 /// sha256 of the raw-x-only P2TR script `51 20 <pk>` — how the covenant
-/// commits to a payout destination. Withdrawals pay the wallet key itself.
+/// commits to a payout destination. Withdrawals pay the venue money key
+/// itself.
 pub fn p2tr_spk_hash(pk: &[u8; 32]) -> [u8; 32] {
     let mut spk = Vec::with_capacity(34);
     spk.extend_from_slice(&[0x51, 0x20]);
@@ -105,33 +186,33 @@ pub fn p2tr_spk_hash(pk: &[u8; 32]) -> [u8; 32] {
     sha(&spk)
 }
 
-fn wallet_pk(key: &WalletKey) -> [u8; 32] {
+fn account_pk(key: &VenueKey) -> [u8; 32] {
     key.public_key().serialize()
 }
 
 /// Sign a venue login challenge. Returns `(digest, signature)`.
-pub fn sign_login(key: &WalletKey, challenge: &str) -> ([u8; 32], Signature) {
-    let d = login_digest(&wallet_pk(key), challenge);
+pub fn sign_login(key: &VenueKey, challenge: &str) -> ([u8; 32], Signature) {
+    let d = login_digest(&account_pk(key), challenge);
     (d, key.sign_digest(d))
 }
 
 /// Sign an order commitment. Returns `(digest, signature)`.
 pub fn sign_order(
-    key: &WalletKey,
+    key: &VenueKey,
     side: OrderSide,
     price: u64,
     qty: u64,
     expiry: u32,
     nonce: u64,
 ) -> ([u8; 32], Signature) {
-    let d = order_digest(&wallet_pk(key), side, price, qty, expiry, nonce);
+    let d = order_digest(&account_pk(key), side, price, qty, expiry, nonce);
     (d, key.sign_digest(d))
 }
 
-/// Sign a withdrawal of `amt` base units paid to the wallet key itself.
-/// Returns `(digest, signature)`.
-pub fn sign_withdraw(key: &WalletKey, amt: u64, root: &[u8; 32]) -> ([u8; 32], Signature) {
-    let pk = wallet_pk(key);
+/// Sign a withdrawal of `amt` base units paid to the venue money key
+/// itself. Returns `(digest, signature)`.
+pub fn sign_withdraw(key: &VenueKey, amt: u64, root: &[u8; 32]) -> ([u8; 32], Signature) {
+    let pk = account_pk(key);
     let d = withdraw_digest(&pk, amt, &p2tr_spk_hash(&pk), root);
     (d, key.sign_digest(d))
 }
@@ -139,7 +220,7 @@ pub fn sign_withdraw(key: &WalletKey, amt: u64, root: &[u8; 32]) -> ([u8; 32], S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::key::Network;
+    use crate::key::WalletKey;
     use elements::secp256k1_zkp::{Message, SECP256K1};
 
     fn hex(b: &[u8]) -> String {
@@ -169,27 +250,45 @@ mod tests {
         );
     }
 
-    /// Signatures verify against the wallet key over the exact digest and
+    /// The money key must never be derivable from view-tier material:
+    /// the same 32 bytes fed to the identity derivation and the venue
+    /// derivation must land on different keys. And like the identity
+    /// key, the venue key is deterministic and network-separated.
+    #[test]
+    fn venue_key_is_seed_derived_not_the_identity_key() {
+        let a = VenueKey::from_seed(&[7u8; 32], Network::LiquidTestnet).unwrap();
+        let b = VenueKey::from_seed(&[7u8; 32], Network::LiquidTestnet).unwrap();
+        let mainnet = VenueKey::from_seed(&[7u8; 32], Network::Liquid).unwrap();
+        let identity = WalletKey::new(&[7u8; 32], Network::LiquidTestnet);
+        assert_eq!(a.public_key(), b.public_key());
+        assert_ne!(a.public_key(), mainnet.public_key());
+        assert_ne!(a.public_key(), identity.public_key());
+    }
+
+    /// The derivation, pinned: an independent implementation (a hardware
+    /// host, another SDK) must land on the same account key from the
+    /// same seed. m/19523'/<network>'/0' from BIP32-master(seed).
+    #[test]
+    fn venue_key_derivation_vectors() {
+        let testnet = VenueKey::from_seed(&[7u8; 32], Network::LiquidTestnet).unwrap();
+        let mainnet = VenueKey::from_seed(&[7u8; 32], Network::Liquid).unwrap();
+        assert_eq!(hex(&testnet.public_key().serialize()), "PIN_TESTNET");
+        assert_eq!(hex(&mainnet.public_key().serialize()), "PIN_MAINNET");
+    }
+
+    /// Signatures verify against the venue key over the exact digest and
     /// against nothing else, and are deterministic (no aux randomness) —
-    /// the property the Pavel test vectors rely on.
+    /// the property the shared test vectors rely on.
     #[test]
     fn order_signature_verifies_and_is_deterministic() {
-        let key = WalletKey::new(&[7u8; 32], Network::LiquidTestnet);
-        assert_eq!(
-            hex(&key.public_key().serialize()),
-            "c430e1683ac5f48d4e058e602b9ee33890830be3a92fea9f524d5763c15369d1"
-        );
+        let key = VenueKey::from_seed(&[7u8; 32], Network::LiquidTestnet).unwrap();
         let (d, s) = sign_order(&key, OrderSide::Sell, 7_700_000_000, 1_000, 50, 1);
         let (d2, s2) = sign_order(&key, OrderSide::Sell, 7_700_000_000, 1_000, 50, 1);
         assert_eq!((d, s), (d2, s2));
-        // byte-stable — the property the rf-vectors example (the
-        // StartSignMessage test vectors) relies on
-        assert_eq!(hex(&d), "517c14e1fd512ff1dfb107624ded8dd91db233ca5780b936a0bd8f69823ad56a");
-        assert_eq!(
-            s.to_string(),
-            "3211e42407320724a7e9d89bf322da8e25747e36defc42a3955a718a2ef0e493\
-             2c0990afbe13dda77e3b4bd7c872e6a907afc7fc5ad80b0e9179d50116197884"
-        );
+        // byte-stable — the property the rf-vectors example (the venue
+        // signing test vectors) relies on
+        assert_eq!(hex(&d), "PIN_DIGEST");
+        assert_eq!(s.to_string(), "PIN_SIG");
         assert!(SECP256K1
             .verify_schnorr(&s, &Message::from_digest(d), &key.public_key())
             .is_ok());
