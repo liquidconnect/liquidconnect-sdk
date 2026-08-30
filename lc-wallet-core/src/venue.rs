@@ -276,7 +276,10 @@ mod tests {
             hex(&testnet.public_key().serialize()),
             "849904e240e9eb333f1d7889a4ec9b318ab19a877c929728aa511046618b5c33"
         );
-        assert_eq!(hex(&mainnet.public_key().serialize()), "PIN_MAINNET");
+        assert_eq!(
+            hex(&mainnet.public_key().serialize()),
+            "ef4de5ec56a30bdcf5a078e0111d3ebadba10350cfcb8a272231563f71c3a00b"
+        );
     }
 
     /// Signatures verify against the venue key over the exact digest and
@@ -291,7 +294,11 @@ mod tests {
         // byte-stable — the property the rf-vectors example (the venue
         // signing test vectors) relies on
         assert_eq!(hex(&d), "c1e1213719d7a48a911642992a41f0e4e26bd1fdf446394bb7777b98b2fb749b");
-        assert_eq!(s.to_string(), "PIN_SIG");
+        assert_eq!(
+            s.to_string(),
+            "d530f38b20a7de17fd3d17a0a250eb4f0a390eba9b64f0f0f0d00aefd3736e72\
+             8163fa25f9d03a73a6b7417e509ec1b831355221442ac5b127c2ed5318b4f15c"
+        );
         assert!(SECP256K1
             .verify_schnorr(&s, &Message::from_digest(d), &key.public_key())
             .is_ok());
