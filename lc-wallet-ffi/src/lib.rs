@@ -244,6 +244,13 @@ impl LiquidConnectWallet {
         self.handle.accept_sign_message(&request_id);
     }
 
+    /// Approve a message-signing request with a signature the host
+    /// produced in another signer (venue money key, hardware signer):
+    /// 64-byte BIP340 over the request's digest, hex-encoded.
+    pub fn accept_sign_message_signed(&self, request_id: String, signature: String) {
+        self.handle.accept_sign_message_signed(&request_id, &signature);
+    }
+
     pub fn reject_sign_message(&self, request_id: String) {
         self.handle.reject_sign_message(&request_id);
     }

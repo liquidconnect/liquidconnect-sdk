@@ -135,11 +135,21 @@ Rust-less Flutter wallet actually asks for it.
   sign-message wire to `wire.rs` byte-for-byte). Still open: moving the
   app's own Connect transport/session core onto `core.rs` — until then
   the app runs its native copy of the session machine beside ours.
-- `StartSignMessage` support (wire + core + FFI) is unit-tested against
-  the pinned frames but not yet proven against a live connect server —
-  the server side rides `swaption_be` branch `rf-sign-message`, not yet
-  merged or deployed. First live login against a deployed server that
-  relays it is the missing proof.
+- `StartSignMessage` is PROVEN against a live connect server
+  (2026-08-30): `examples/sign-message-e2e` played RP and wallet over
+  real websockets against a local throwaway `connect_server` from
+  `swaption_be` branch `rf-sign-message` — a typed venue order
+  clear-signed with `VenueKey` after digest reconstruction, and an
+  opaque request signed by the identity key, both verified by the RP.
+  What remains is the deployment: that branch is still unmerged, so the
+  production connect server does not relay sign-message yet.
+- The typed clear-sign contract lives in `venue`:
+  `parse_typed_description` recognises canonical JSON in a request's
+  description (`rf/order/v1` / `rf/withdraw/v1` / `rf/login/v1`; u64
+  fields as JSON strings), `typed_request_digest` rebuilds the digest
+  under the wallet's venue key, and the wallet refuses on mismatch —
+  render fields, never a hash. The JSON shapes are pinned by tests;
+  the venue's emission side must match them exactly.
 - Per-platform binding binaries for the third-party story: `cargo-ndk`
   for Android ABIs, an XCFramework for iOS — CI work, since the dev
   host has neither NDK nor Xcode. `bindings/README.md` sketches the

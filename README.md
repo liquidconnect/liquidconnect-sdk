@@ -78,7 +78,7 @@ then open https://test.liquidconnect.io, start a connection, and `link` the `req
 | `transport` | Ready-made tokio transport (default feature) |
 | `approval` | A sign request's PSET as structure to render, honest about confidential fields; payjoin-aware annotation |
 | `payjoin` | Client for SideSwap's payjoin service: pay network fees in USDt, no L-BTC needed |
-| `venue` | Rolling Future venue: the seed-derived money key (`VenueKey`, hardened path m/19523'/net'/0'), covenant-digest builders and typed signing (`rf/order/v1`, `rf/withdraw/v1`, `rf/login/v1`), and the spend surface for its raw-key P2TR (deposits spend what withdrawals pay) - vectors pinned against the venue server |
+| `venue` | Rolling Future venue: the seed-derived money key (`VenueKey`, hardened path m/19523'/net'/0'), covenant-digest builders and typed signing (`rf/order/v1`, `rf/withdraw/v1`, `rf/login/v1`), the spend surface for its raw-key P2TR (deposits spend what withdrawals pay), and the typed clear-sign contract for `StartSignMessage` descriptions (`parse_typed_description` / `typed_request_digest`: rebuild the digest from the stated fields, refuse mismatches, render fields — never a hash) - vectors pinned against the venue server |
 
 ## Flutter
 

@@ -827,6 +827,13 @@ public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
     func acceptSignMessage(requestId: String) 
     
     /**
+     * Approve a message-signing request with a signature the host
+     * produced in another signer (venue money key, hardware signer):
+     * 64-byte BIP340 over the request's digest, hex-encoded.
+     */
+    func acceptSignMessageSigned(requestId: String, signature: String) 
+    
+    /**
      * Feed a scanned QR payload or opened `liquidconnect://` link.
      */
     func openLink(url: String) throws 
@@ -943,6 +950,19 @@ open func acceptSign(requestId: String, signedPset: String)  {try! rustCall() {
 open func acceptSignMessage(requestId: String)  {try! rustCall() {
     uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_sign_message(self.uniffiClonePointer(),
         FfiConverterString.lower(requestId),$0
+    )
+}
+}
+    
+    /**
+     * Approve a message-signing request with a signature the host
+     * produced in another signer (venue money key, hardware signer):
+     * 64-byte BIP340 over the request's digest, hex-encoded.
+     */
+open func acceptSignMessageSigned(requestId: String, signature: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_sign_message_signed(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),
+        FfiConverterString.lower(signature),$0
     )
 }
 }
@@ -3118,6 +3138,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign_message() != 56427) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign_message_signed() != 9089) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_open_link() != 52457) {

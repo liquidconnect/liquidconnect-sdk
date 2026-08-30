@@ -201,6 +201,18 @@ pub enum OrderSide {
     Sell,
 }
 
+/// The chain's genesis hash — Elements taproot sighashes commit to it,
+/// so every venue spend needs it. None for regtest, whose genesis is
+/// per-chain.
+pub fn genesis_block_hash(network: Network) -> Option<elements::BlockHash> {
+    let hex = match network {
+        Network::Liquid => "1466275836220db2944ca059a3a10ef6fd2ea684b0688d2c379296888a206003",
+        Network::LiquidTestnet => "a771da8e52ee6ad581ed1e9a99825e5b3b7992225534eaa2ae23244fe26ab1c1",
+        Network::Regtest => return None,
+    };
+    Some(hex.parse().expect("static genesis hex"))
+}
+
 fn sha(m: &[u8]) -> [u8; 32] {
     sha256::Hash::hash(m).to_byte_array()
 }
@@ -306,6 +318,130 @@ pub fn sign_withdraw(key: &VenueKey, amt: u64, root: &[u8; 32]) -> ([u8; 32], Si
     (d, key.sign_digest(d))
 }
 
+/// A typed venue request carried in a `StartSignMessage` description.
+///
+/// The clear-signing contract: instead of asking the user to approve an
+/// opaque digest, the venue puts canonical JSON in the request's
+/// `description`; the wallet parses it, REBUILDS the digest from the
+/// typed fields with its own account key, and refuses unless the result
+/// equals the request's digest. Only then does it render price/qty/side
+/// (not a hash) and sign — with the venue money key, not the Connect
+/// identity key. The digest equality check is what makes the description
+/// trustworthy: a description that lies about the fields cannot hash to
+/// the digest being signed.
+///
+/// The canonical JSON, pinned by tests below (u64 fields are strings so
+/// a JavaScript venue can emit them losslessly; `root` is 64 hex chars):
+///
+/// ```json
+/// {"kind":"rf/order/v1","product":"RF-BTC-USDT","side":"sell",
+///  "price":"11500000000000","qty":"10000000","expiry":100,"nonce":"7"}
+/// {"kind":"rf/withdraw/v1","amt":"5000","root":"aaaa…(64)"}
+/// {"kind":"rf/login/v1","challenge":"c1"}
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypedRequest {
+    Order {
+        product: String,
+        side: OrderSide,
+        price: u64,
+        qty: u64,
+        expiry: u32,
+        nonce: u64,
+    },
+    /// A withdrawal paid to the account key's own P2TR (the only
+    /// destination the convenience digest commits to).
+    Withdraw { amt: u64, root: [u8; 32] },
+    Login { challenge: String },
+}
+
+/// Recognise a typed venue description. `None`: not typed — treat the
+/// request as an ordinary opaque sign-message. `Some(Err…)`: the
+/// description CLAIMS to be typed (`"kind":"rf/…"`) but is malformed —
+/// the wallet must refuse, never fall back to opaque signing, or a
+/// venue request would get silently signed by the wrong key without
+/// clear-signing.
+pub fn parse_typed_description(description: &str) -> Option<Result<TypedRequest, String>> {
+    let value: serde_json::Value = serde_json::from_str(description.trim()).ok()?;
+    let kind = value.get("kind")?.as_str()?;
+    if !kind.starts_with("rf/") {
+        return None;
+    }
+    Some(parse_typed_fields(kind, &value))
+}
+
+fn parse_typed_fields(kind: &str, value: &serde_json::Value) -> Result<TypedRequest, String> {
+    let str_field = |name: &str| -> Result<&str, String> {
+        value
+            .get(name)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("missing or non-string field: {name}"))
+    };
+    let u64_field = |name: &str| -> Result<u64, String> {
+        str_field(name)?
+            .parse::<u64>()
+            .map_err(|_| format!("field {name} is not a u64 string"))
+    };
+
+    match kind {
+        "rf/order/v1" => Ok(TypedRequest::Order {
+            product: str_field("product")?.to_owned(),
+            side: match str_field("side")? {
+                "buy" => OrderSide::Buy,
+                "sell" => OrderSide::Sell,
+                other => return Err(format!("unknown side: {other}")),
+            },
+            price: u64_field("price")?,
+            qty: u64_field("qty")?,
+            expiry: value
+                .get("expiry")
+                .and_then(|v| v.as_u64())
+                .and_then(|v| u32::try_from(v).ok())
+                .ok_or("missing or invalid field: expiry")?,
+            nonce: u64_field("nonce")?,
+        }),
+        "rf/withdraw/v1" => {
+            let mut root = [0u8; 32];
+            hex::decode_to_slice(str_field("root")?, &mut root)
+                .map_err(|_| "root is not 32 bytes of hex".to_owned())?;
+            Ok(TypedRequest::Withdraw {
+                amt: u64_field("amt")?,
+                root,
+            })
+        }
+        "rf/login/v1" => Ok(TypedRequest::Login {
+            challenge: str_field("challenge")?.to_owned(),
+        }),
+        other => Err(format!("unknown typed request kind: {other}")),
+    }
+}
+
+/// Rebuild the digest a typed request commits to, under account key
+/// `pk`. The wallet compares this against the digest in the
+/// `StartSignMessage` request and refuses on mismatch. Errors when the
+/// request names a product this build does not trade.
+pub fn typed_request_digest(request: &TypedRequest, pk: &[u8; 32]) -> Result<[u8; 32], String> {
+    match request {
+        TypedRequest::Order {
+            product,
+            side,
+            price,
+            qty,
+            expiry,
+            nonce,
+        } => {
+            if product.as_bytes() != PRODUCT {
+                return Err(format!("unknown product: {product}"));
+            }
+            Ok(order_digest(pk, *side, *price, *qty, *expiry, *nonce))
+        }
+        TypedRequest::Withdraw { amt, root } => {
+            Ok(withdraw_digest(pk, *amt, &p2tr_spk_hash(pk), root))
+        }
+        TypedRequest::Login { challenge } => Ok(login_digest(pk, challenge)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +473,67 @@ mod tests {
             hex(&withdraw_digest(&pk, 5000, &dest, &[0xAA; 32])),
             "14cf3b3d26843d9b2b64fb9bb4fd1e5774d626453c79b55d36c68ec1004c7b8a"
         );
+    }
+
+    /// The typed-description contract: canonical JSON parses, rebuilds
+    /// to exactly the shared digest vectors, non-typed text is None,
+    /// and a malformed typed claim is a hard error — never a fallback.
+    #[test]
+    fn typed_descriptions_rebuild_the_shared_vectors() {
+        let pk = [3u8; 32];
+
+        let order = parse_typed_description(
+            r#"{"kind":"rf/order/v1","product":"RF-BTC-USDT","side":"buy","price":"11500000000000","qty":"10000000","expiry":100,"nonce":"7"}"#,
+        )
+        .expect("typed")
+        .expect("well-formed");
+        assert_eq!(
+            hex(&typed_request_digest(&order, &pk).unwrap()),
+            "944e4e036d891dd277fee0987c355b2609fb09d6fc149ee2e2fd2b907acf9512"
+        );
+
+        let login =
+            parse_typed_description(r#"{"kind":"rf/login/v1","challenge":"c1"}"#)
+                .expect("typed")
+                .expect("well-formed");
+        assert_eq!(
+            hex(&typed_request_digest(&login, &pk).unwrap()),
+            "04e78310fc229b8d973fcd61744511cbe9182c1b00bcd56eee5f6b7181efdf4d"
+        );
+
+        let withdraw = parse_typed_description(&format!(
+            r#"{{"kind":"rf/withdraw/v1","amt":"5000","root":"{}"}}"#,
+            "aa".repeat(32)
+        ))
+        .expect("typed")
+        .expect("well-formed");
+        assert_eq!(
+            hex(&typed_request_digest(&withdraw, &pk).unwrap()),
+            "14cf3b3d26843d9b2b64fb9bb4fd1e5774d626453c79b55d36c68ec1004c7b8a"
+        );
+
+        // Not typed: ordinary opaque descriptions pass through as None.
+        assert!(parse_typed_description("Sell 0.001 BTC").is_none());
+        assert!(parse_typed_description(r#"{"note":"hi"}"#).is_none());
+
+        // A typed CLAIM that is malformed is a refusal, not a fallback.
+        assert!(parse_typed_description(r#"{"kind":"rf/order/v1"}"#)
+            .unwrap()
+            .is_err());
+        assert!(parse_typed_description(r#"{"kind":"rf/unknown/v9"}"#)
+            .unwrap()
+            .is_err());
+
+        // A product this build does not trade refuses at digest time.
+        let alien = TypedRequest::Order {
+            product: "RF-DOGE-USDT".to_owned(),
+            side: OrderSide::Buy,
+            price: 1,
+            qty: 1,
+            expiry: 1,
+            nonce: 1,
+        };
+        assert!(typed_request_digest(&alien, &pk).is_err());
     }
 
     /// The money key must never be derivable from view-tier material:

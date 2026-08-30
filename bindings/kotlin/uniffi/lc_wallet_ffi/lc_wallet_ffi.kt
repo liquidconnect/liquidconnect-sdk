@@ -792,6 +792,8 @@ internal open class UniffiVTableCallbackInterfaceWalletEventListener(
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -842,6 +844,8 @@ fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_login(
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign_message(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign_message_signed(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_open_link(
 ): Short
@@ -954,6 +958,8 @@ fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_login(`ptr`: Point
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_sign(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,`signedPset`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_sign_message(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_sign_message_signed(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,`signature`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_open_link(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1157,6 +1163,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign_message() != 56427.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign_message_signed() != 9089.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_open_link() != 52457.toShort()) {
@@ -2078,6 +2087,13 @@ public interface LiquidConnectWalletInterface {
     fun `acceptSignMessage`(`requestId`: kotlin.String)
     
     /**
+     * Approve a message-signing request with a signature the host
+     * produced in another signer (venue money key, hardware signer):
+     * 64-byte BIP340 over the request's digest, hex-encoded.
+     */
+    fun `acceptSignMessageSigned`(`requestId`: kotlin.String, `signature`: kotlin.String)
+    
+    /**
      * Feed a scanned QR payload or opened `liquidconnect://` link.
      */
     fun `openLink`(`url`: kotlin.String)
@@ -2230,6 +2246,22 @@ open class LiquidConnectWallet: Disposable, AutoCloseable, LiquidConnectWalletIn
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_sign_message(
         it, FfiConverterString.lower(`requestId`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Approve a message-signing request with a signature the host
+     * produced in another signer (venue money key, hardware signer):
+     * 64-byte BIP340 over the request's digest, hex-encoded.
+     */override fun `acceptSignMessageSigned`(`requestId`: kotlin.String, `signature`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_sign_message_signed(
+        it, FfiConverterString.lower(`requestId`),FfiConverterString.lower(`signature`),_status)
 }
     }
     

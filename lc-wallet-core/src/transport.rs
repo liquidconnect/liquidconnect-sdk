@@ -108,6 +108,17 @@ impl WalletConnect {
         });
     }
 
+    /// Approve a message-signing request with a signature produced in
+    /// another signer (the venue money key after a typed clear-sign, or
+    /// a hardware signer). 64-byte BIP340 signature over the request's
+    /// digest, hex-encoded.
+    pub fn accept_sign_message_signed(&self, request_id: &str, signature: &str) {
+        self.send(Input::SignMessageSigned {
+            request_id: request_id.to_owned(),
+            signature: signature.to_owned(),
+        });
+    }
+
     pub fn reject_sign_message(&self, request_id: &str) {
         self.send(Input::SignMessageRejected {
             request_id: request_id.to_owned(),

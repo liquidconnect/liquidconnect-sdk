@@ -43,6 +43,18 @@ pub enum Input {
     /// approves by id and never supplies bytes to sign.
     SignMessageAccepted { request_id: String },
 
+    /// Approve a message-signing request with a signature the host
+    /// produced in another signer — the venue money key after a typed
+    /// clear-sign (`crate::venue::parse_typed_description`), or a
+    /// hardware signer. The host supplies a finished signature, never
+    /// bytes for this crate's keys to sign; the request must still be
+    /// live, or nothing is sent.
+    SignMessageSigned {
+        request_id: String,
+        /// 64-byte BIP340 signature over the request's digest, hex.
+        signature: String,
+    },
+
     SignMessageRejected { request_id: String },
 
     RegisterFcmToken { token: String },
@@ -445,6 +457,24 @@ impl WalletConnectCore {
                 self.finish_request(request_id, &mut effects);
             }
 
+            Input::SignMessageSigned {
+                request_id,
+                signature,
+            } => {
+                if self.sign_message_requests.contains_key(&request_id) {
+                    self.add_user_action(
+                        wire::UserAction::AcceptSignMessageRequest {
+                            request_id: request_id.clone(),
+                            signature,
+                        },
+                        &mut effects,
+                    );
+                } else {
+                    log::error!("sign message request {request_id} is not live, dropping signature");
+                }
+                self.finish_request(request_id, &mut effects);
+            }
+
             Input::SignMessageRejected { request_id } => {
                 self.add_user_action(
                     wire::UserAction::CancelSignMessageRequest {
@@ -665,6 +695,28 @@ mod tests {
                 &WalletKey::new(&[7u8; 32], crate::key::Network::LiquidTestnet).public_key(),
             )
             .expect("signature must verify against the login key over the digest");
+
+        // A host-supplied signature (venue key / hardware) rides the same
+        // accept action verbatim; a dead request id sends nothing.
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: format!(
+                    r#"{{"Notif":{{"notif":{{"SignMessageRequestCreated":{{"request":{{"request_id":"s9","domain":"swaption.io","digest":"{digest_hex}","description":"typed order","ttl":60000}}}}}}}}}}"#
+                ),
+            },
+        });
+        let effects = core.handle(Input::SignMessageSigned {
+            request_id: "s9".to_owned(),
+            signature: "cd".repeat(64),
+        });
+        let frames = sent_frames(&effects);
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].contains(&"cd".repeat(64)));
+        let effects = core.handle(Input::SignMessageSigned {
+            request_id: "gone".to_owned(),
+            signature: "cd".repeat(64),
+        });
+        assert!(sent_frames(&effects).is_empty());
 
         // Rejection produces a cancel, not a signature.
         let _ = core.handle(Input::Transport {
