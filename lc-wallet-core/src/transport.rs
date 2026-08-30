@@ -32,6 +32,9 @@ pub enum WalletEvent {
     SignRequested(wire::SignRequest),
     SignRequestRemoved { request_id: String },
 
+    SignMessageRequested(wire::SignMessageRequest),
+    SignMessageRequestRemoved { request_id: String },
+
     Sessions(Vec<wire::Session>),
     SessionCreated(wire::Session),
     SessionRemoved { session_id: String },
@@ -96,6 +99,21 @@ impl WalletConnect {
         });
     }
 
+    /// Approve a message-signing request by id. The core signs the digest
+    /// it stored from the server's request with the wallet key — the host
+    /// never supplies the bytes to sign.
+    pub fn accept_sign_message(&self, request_id: &str) {
+        self.send(Input::SignMessageAccepted {
+            request_id: request_id.to_owned(),
+        });
+    }
+
+    pub fn reject_sign_message(&self, request_id: &str) {
+        self.send(Input::SignMessageRejected {
+            request_id: request_id.to_owned(),
+        });
+    }
+
     pub fn stop_session(&self, session_id: &str) {
         self.send(Input::StopSession {
             session_id: session_id.to_owned(),
@@ -133,6 +151,12 @@ fn apply_effects(
             Effect::AddSignRequest { request } => WalletEvent::SignRequested(request),
             Effect::RemoveSignRequest { request_id } => {
                 WalletEvent::SignRequestRemoved { request_id }
+            }
+            Effect::AddSignMessageRequest { request } => {
+                WalletEvent::SignMessageRequested(request)
+            }
+            Effect::RemoveSignMessageRequest { request_id } => {
+                WalletEvent::SignMessageRequestRemoved { request_id }
             }
             Effect::SessionList { sessions } => WalletEvent::Sessions(sessions),
             Effect::SessionCreated { session } => WalletEvent::SessionCreated(session),

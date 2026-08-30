@@ -120,6 +120,16 @@ impl WalletKey {
         SECP256K1.sign_schnorr(&message, &self.keypair)
     }
 
+    /// BIP340 over a raw 32-byte digest — the `StartSignMessage` primitive:
+    /// the RP defines and binds the digest's meaning, the wallet's key only
+    /// attests control. Crate-private on purpose: the only road here is the
+    /// session core's approval path, which signs the digest **stored from a
+    /// live server request** after the host's explicit accept — a host
+    /// cannot hand arbitrary bytes to the identity key through this crate.
+    pub(crate) fn sign_digest(&self, digest: [u8; 32]) -> secp256k1_zkp::schnorr::Signature {
+        SECP256K1.sign_schnorr(&Message::from_digest(digest), &self.keypair)
+    }
+
     /// Sign an identity-API operation. See [`identity_auth_message`].
     pub fn sign_identity(
         &self,

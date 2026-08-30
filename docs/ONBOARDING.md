@@ -32,8 +32,11 @@ identity and a login-bound one land on the same server-side record.
 The mbk is **view-tier** material — wallets export it to watch-only
 servers and explorers so third parties can see without spending — so a
 key derived from it must never control funds. That is the boundary:
-`WalletKey` signs logins and identity calls only, and has no raw
-digest-signing entry point. Spend-class signing for the Rolling Future
+`WalletKey` signs logins, identity calls, and `StartSignMessage`
+digests — the last only through the session core's approval path, which
+signs the digest **stored from a live server request** after the host's
+explicit accept (`Input::SignMessageAccepted`). The raw signer is
+crate-private, so a host can never hand this key arbitrary bytes. Spend-class signing for the Rolling Future
 venue uses `venue::VenueKey`, derived from the wallet **seed** via the
 dedicated hardened path `m/19523'/<network>'/0'` (19523 = 0x4C43,
 "LC"); its raw signer is private, so the typed `rf/*` builders are the
@@ -125,9 +128,18 @@ Rust-less Flutter wallet actually asks for it.
 
 ## Open edges (good first work)
 
-- Wire `lc-wallet-core` (transport + identity) into a Flutter app's
-  Rust core along the path above — the first real host integration and
-  the identity module's first proof from an app.
+- The first host integration LANDED 2026-08-30: the SideSwap app
+  consumes this crate for **identity** (its `lc-sdk` branch,
+  `sideswap_client/src/worker/lc_identity.rs`, with a test pinning the
+  app's key derivation to ours and another pinning its native
+  sign-message wire to `wire.rs` byte-for-byte). Still open: moving the
+  app's own Connect transport/session core onto `core.rs` — until then
+  the app runs its native copy of the session machine beside ours.
+- `StartSignMessage` support (wire + core + FFI) is unit-tested against
+  the pinned frames but not yet proven against a live connect server —
+  the server side rides `swaption_be` branch `rf-sign-message`, not yet
+  merged or deployed. First live login against a deployed server that
+  relays it is the missing proof.
 - Per-platform binding binaries for the third-party story: `cargo-ndk`
   for Android ABIs, an XCFramework for iOS — CI work, since the dev
   host has neither NDK nor Xcode. `bindings/README.md` sketches the

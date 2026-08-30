@@ -63,6 +63,18 @@ pub struct SignRequestInfo {
 }
 
 #[derive(uniffi::Record)]
+pub struct SignMessageRequestInfo {
+    pub request_id: String,
+    pub domain: String,
+    /// 32-byte digest, hex-encoded. The host renders the domain and
+    /// description; the digest's meaning is the requesting service's to
+    /// define and bind.
+    pub digest: String,
+    pub description: Option<String>,
+    pub ttl_ms: u64,
+}
+
+#[derive(uniffi::Record)]
 pub struct SessionInfo {
     pub session_id: String,
     pub domain: String,
@@ -78,6 +90,8 @@ pub enum WalletEvent {
     LoginRequestRemoved { request_id: String },
     SignRequested { request: SignRequestInfo },
     SignRequestRemoved { request_id: String },
+    SignMessageRequested { request: SignMessageRequestInfo },
+    SignMessageRequestRemoved { request_id: String },
     Sessions { sessions: Vec<SessionInfo> },
     SessionCreated { session: SessionInfo },
     SessionRemoved { session_id: String },
@@ -117,6 +131,18 @@ fn map_event(event: transport::WalletEvent) -> WalletEvent {
         },
         transport::WalletEvent::SignRequestRemoved { request_id } => {
             WalletEvent::SignRequestRemoved { request_id }
+        }
+        transport::WalletEvent::SignMessageRequested(r) => WalletEvent::SignMessageRequested {
+            request: SignMessageRequestInfo {
+                request_id: r.request_id,
+                domain: r.domain,
+                digest: r.digest,
+                description: r.description,
+                ttl_ms: r.ttl.as_millis(),
+            },
+        },
+        transport::WalletEvent::SignMessageRequestRemoved { request_id } => {
+            WalletEvent::SignMessageRequestRemoved { request_id }
         }
         transport::WalletEvent::Sessions(s) => WalletEvent::Sessions {
             sessions: s.into_iter().map(session_info).collect(),
@@ -208,6 +234,18 @@ impl LiquidConnectWallet {
     /// The PSET must already be verified and signed by the host wallet.
     pub fn accept_sign(&self, request_id: String, signed_pset: String) {
         self.handle.accept_sign(&request_id, &signed_pset);
+    }
+
+    /// Approve a message-signing request by id after showing the user the
+    /// domain and description. The core signs the digest it stored from
+    /// the server's request with the wallet key — the host never supplies
+    /// the bytes to sign.
+    pub fn accept_sign_message(&self, request_id: String) {
+        self.handle.accept_sign_message(&request_id);
+    }
+
+    pub fn reject_sign_message(&self, request_id: String) {
+        self.handle.reject_sign_message(&request_id);
     }
 
     pub fn reject_sign(&self, request_id: String) {

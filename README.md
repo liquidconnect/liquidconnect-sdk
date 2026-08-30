@@ -46,6 +46,14 @@ while let Some(event) = events.recv().await {
             // own signer; then deliver the result:
             wallet.accept_sign(&req.request_id, &signed_pset);
         }
+        WalletEvent::SignMessageRequested(req) => {
+            // No PSET: a service asks for a BIP340 signature over a
+            // 32-byte digest by the wallet's Connect identity key. Show
+            // req.domain and req.description; on accept the SDK signs
+            // the digest it stored from the server's request — you never
+            // pass bytes to sign.
+            wallet.accept_sign_message(&req.request_id);
+        }
         _ => {}
     }
 }
@@ -64,13 +72,13 @@ then open https://test.liquidconnect.io, start a connection, and `link` the `req
 | Module | What it is |
 | --- | --- |
 | `wire` | The wallet-side wire protocol, frame shapes pinned by tests |
-| `key` | Connect identity key + challenge-login signing — mbk-derived, deliberately never spend-class |
+| `key` | Connect identity key + challenge-login signing — mbk-derived, deliberately never spend-class; also signs `StartSignMessage` digests, but only through the session core's approval path |
 | `link` | `liquidconnect://` / app-link parsing |
 | `core` | Sans-io session state machine — bring your own transport if you have one |
 | `transport` | Ready-made tokio transport (default feature) |
 | `approval` | A sign request's PSET as structure to render, honest about confidential fields; payjoin-aware annotation |
 | `payjoin` | Client for SideSwap's payjoin service: pay network fees in USDt, no L-BTC needed |
-| `venue` | Rolling Future venue: the seed-derived money key (`VenueKey`, hardened path m/19523'/net'/0'), covenant-digest builders and typed signing (`rf/order/v1`, `rf/withdraw/v1`, `rf/login/v1`) - vectors pinned against the venue server |
+| `venue` | Rolling Future venue: the seed-derived money key (`VenueKey`, hardened path m/19523'/net'/0'), covenant-digest builders and typed signing (`rf/order/v1`, `rf/withdraw/v1`, `rf/login/v1`), and the spend surface for its raw-key P2TR (deposits spend what withdrawals pay) - vectors pinned against the venue server |
 
 ## Flutter
 
@@ -95,7 +103,7 @@ cargo run --example payjoin-probe
 
 ## What this SDK will never do
 
-Hold your wallet's keys, sign transactions, or approve anything. The wallet signs with its own machinery after its own verification. Two narrow, deliberate exceptions, each a dedicated key the SDK derives itself: the Connect identity key (`key::WalletKey`, mbk-derived, signs logins and identity calls — never money, because the master blinding key is view-tier material) and the venue money key (`venue::VenueKey`, seed-derived on its own hardened path, signing only typed `rf/*` digests the SDK builds itself — there is no sign-arbitrary-bytes entry point, so a transaction sighash can never be smuggled in as "a message"). Wallets with hardware-custodied seeds skip `VenueKey` and sign the public digest builders' output in their own signer. `approval::summarize_pset` reports exactly what is explicit in a PSET and marks everything else `confidential` — when `fully_explicit` is false, your own decode must fill the gaps before a person is asked to approve.
+Hold your wallet's keys, sign transactions, or approve anything. The wallet signs with its own machinery after its own verification. Two narrow, deliberate exceptions, each a dedicated key the SDK derives itself. The Connect identity key (`key::WalletKey`, mbk-derived, view-tier — never money) signs logins, identity calls, and — through the session core's approval path only — `StartSignMessage` digests: the core signs the digest it stored from a live server request after the host's explicit accept, and there is no entry point through which a host can hand this key arbitrary bytes. The venue money key (`venue::VenueKey`, seed-derived on its own hardened path) signs typed `rf/*` digests the SDK builds itself, and key-path-spends PSET inputs paying its own raw P2TR — spend-class by design, so the host renders and verifies the transaction before asking; a digest offered from outside can still never reach it as "a message". Wallets with hardware-custodied seeds skip `VenueKey` and sign the public digest builders' output in their own signer. `approval::summarize_pset` reports exactly what is explicit in a PSET and marks everything else `confidential` — when `fully_explicit` is false, your own decode must fill the gaps before a person is asked to approve.
 
 ## Protocol references
 

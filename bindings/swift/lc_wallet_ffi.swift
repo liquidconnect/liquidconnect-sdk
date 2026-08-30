@@ -819,6 +819,14 @@ public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
     func acceptSign(requestId: String, signedPset: String) 
     
     /**
+     * Approve a message-signing request by id after showing the user the
+     * domain and description. The core signs the digest it stored from
+     * the server's request with the wallet key — the host never supplies
+     * the bytes to sign.
+     */
+    func acceptSignMessage(requestId: String) 
+    
+    /**
      * Feed a scanned QR payload or opened `liquidconnect://` link.
      */
     func openLink(url: String) throws 
@@ -828,6 +836,8 @@ public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
     func rejectLogin(requestId: String) 
     
     func rejectSign(requestId: String) 
+    
+    func rejectSignMessage(requestId: String) 
     
     func stopSession(sessionId: String) 
     
@@ -925,6 +935,19 @@ open func acceptSign(requestId: String, signedPset: String)  {try! rustCall() {
 }
     
     /**
+     * Approve a message-signing request by id after showing the user the
+     * domain and description. The core signs the digest it stored from
+     * the server's request with the wallet key — the host never supplies
+     * the bytes to sign.
+     */
+open func acceptSignMessage(requestId: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_sign_message(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),$0
+    )
+}
+}
+    
+    /**
      * Feed a scanned QR payload or opened `liquidconnect://` link.
      */
 open func openLink(url: String)throws   {try rustCallWithError(FfiConverterTypeLcError_lift) {
@@ -950,6 +973,13 @@ open func rejectLogin(requestId: String)  {try! rustCall() {
     
 open func rejectSign(requestId: String)  {try! rustCall() {
     uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_sign(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),$0
+    )
+}
+}
+    
+open func rejectSignMessage(requestId: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_sign_message(self.uniffiClonePointer(),
         FfiConverterString.lower(requestId),$0
     )
 }
@@ -2083,6 +2113,110 @@ public func FfiConverterTypeSessionInfo_lower(_ value: SessionInfo) -> RustBuffe
 }
 
 
+public struct SignMessageRequestInfo {
+    public var requestId: String
+    public var domain: String
+    /**
+     * 32-byte digest, hex-encoded. The host renders the domain and
+     * description; the digest's meaning is the requesting service's to
+     * define and bind.
+     */
+    public var digest: String
+    public var description: String?
+    public var ttlMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requestId: String, domain: String, 
+        /**
+         * 32-byte digest, hex-encoded. The host renders the domain and
+         * description; the digest's meaning is the requesting service's to
+         * define and bind.
+         */digest: String, description: String?, ttlMs: UInt64) {
+        self.requestId = requestId
+        self.domain = domain
+        self.digest = digest
+        self.description = description
+        self.ttlMs = ttlMs
+    }
+}
+
+#if compiler(>=6)
+extension SignMessageRequestInfo: Sendable {}
+#endif
+
+
+extension SignMessageRequestInfo: Equatable, Hashable {
+    public static func ==(lhs: SignMessageRequestInfo, rhs: SignMessageRequestInfo) -> Bool {
+        if lhs.requestId != rhs.requestId {
+            return false
+        }
+        if lhs.domain != rhs.domain {
+            return false
+        }
+        if lhs.digest != rhs.digest {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.ttlMs != rhs.ttlMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(requestId)
+        hasher.combine(domain)
+        hasher.combine(digest)
+        hasher.combine(description)
+        hasher.combine(ttlMs)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSignMessageRequestInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SignMessageRequestInfo {
+        return
+            try SignMessageRequestInfo(
+                requestId: FfiConverterString.read(from: &buf), 
+                domain: FfiConverterString.read(from: &buf), 
+                digest: FfiConverterString.read(from: &buf), 
+                description: FfiConverterOptionString.read(from: &buf), 
+                ttlMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SignMessageRequestInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.requestId, into: &buf)
+        FfiConverterString.write(value.domain, into: &buf)
+        FfiConverterString.write(value.digest, into: &buf)
+        FfiConverterOptionString.write(value.description, into: &buf)
+        FfiConverterUInt64.write(value.ttlMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSignMessageRequestInfo_lift(_ buf: RustBuffer) throws -> SignMessageRequestInfo {
+    return try FfiConverterTypeSignMessageRequestInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSignMessageRequestInfo_lower(_ value: SignMessageRequestInfo) -> RustBuffer {
+    return FfiConverterTypeSignMessageRequestInfo.lower(value)
+}
+
+
 public struct SignRequestInfo {
     public var requestId: String
     public var domain: String
@@ -2511,6 +2645,10 @@ public enum WalletEvent {
     )
     case signRequestRemoved(requestId: String
     )
+    case signMessageRequested(request: SignMessageRequestInfo
+    )
+    case signMessageRequestRemoved(requestId: String
+    )
     case sessions(sessions: [SessionInfo]
     )
     case sessionCreated(session: SessionInfo
@@ -2553,16 +2691,22 @@ public struct FfiConverterTypeWalletEvent: FfiConverterRustBuffer {
         case 7: return .signRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
         )
         
-        case 8: return .sessions(sessions: try FfiConverterSequenceTypeSessionInfo.read(from: &buf)
+        case 8: return .signMessageRequested(request: try FfiConverterTypeSignMessageRequestInfo.read(from: &buf)
         )
         
-        case 9: return .sessionCreated(session: try FfiConverterTypeSessionInfo.read(from: &buf)
+        case 9: return .signMessageRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
         )
         
-        case 10: return .sessionRemoved(sessionId: try FfiConverterString.read(from: &buf)
+        case 10: return .sessions(sessions: try FfiConverterSequenceTypeSessionInfo.read(from: &buf)
         )
         
-        case 11: return .minimizeMobileApp
+        case 11: return .sessionCreated(session: try FfiConverterTypeSessionInfo.read(from: &buf)
+        )
+        
+        case 12: return .sessionRemoved(sessionId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 13: return .minimizeMobileApp
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2604,23 +2748,33 @@ public struct FfiConverterTypeWalletEvent: FfiConverterRustBuffer {
             FfiConverterString.write(requestId, into: &buf)
             
         
-        case let .sessions(sessions):
+        case let .signMessageRequested(request):
             writeInt(&buf, Int32(8))
+            FfiConverterTypeSignMessageRequestInfo.write(request, into: &buf)
+            
+        
+        case let .signMessageRequestRemoved(requestId):
+            writeInt(&buf, Int32(9))
+            FfiConverterString.write(requestId, into: &buf)
+            
+        
+        case let .sessions(sessions):
+            writeInt(&buf, Int32(10))
             FfiConverterSequenceTypeSessionInfo.write(sessions, into: &buf)
             
         
         case let .sessionCreated(session):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(11))
             FfiConverterTypeSessionInfo.write(session, into: &buf)
             
         
         case let .sessionRemoved(sessionId):
-            writeInt(&buf, Int32(10))
+            writeInt(&buf, Int32(12))
             FfiConverterString.write(sessionId, into: &buf)
             
         
         case .minimizeMobileApp:
-            writeInt(&buf, Int32(11))
+            writeInt(&buf, Int32(13))
         
         }
     }
@@ -2963,6 +3117,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign() != 843) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign_message() != 56427) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_open_link() != 52457) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2973,6 +3130,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_sign() != 29787) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_sign_message() != 16090) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_stop_session() != 43554) {

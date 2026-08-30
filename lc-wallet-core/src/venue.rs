@@ -104,6 +104,95 @@ impl VenueKey {
     fn sign_digest(&self, digest: [u8; 32]) -> Signature {
         SECP256K1.sign_schnorr_no_aux_rand(&Message::from_digest(digest), &self.keypair)
     }
+
+    /// The raw-key P2TR script `51 20 <pk>` of the venue money key — the
+    /// script [`p2tr_spk_hash`] commits to: where venue withdrawals pay
+    /// and what venue deposits spend. Raw x-only output key, no BIP341
+    /// tweak, exactly as the covenant pins it.
+    pub fn p2tr_script_pubkey(&self) -> elements::Script {
+        let mut spk = Vec::with_capacity(34);
+        spk.extend_from_slice(&[0x51, 0x20]);
+        spk.extend_from_slice(&self.public_key().serialize());
+        elements::Script::from(spk)
+    }
+
+    /// Sign input `index` of `tx` as a key-path spend of
+    /// [`VenueKey::p2tr_script_pubkey`]. `prevouts` must carry every
+    /// input's TxOut and `genesis` the chain's genesis hash — Elements
+    /// taproot sighashes commit to both. This is spend-class signing:
+    /// the host renders and verifies the transaction before asking.
+    pub fn sign_p2tr_keyspend(
+        &self,
+        tx: &elements::Transaction,
+        index: usize,
+        prevouts: &[elements::TxOut],
+        genesis: elements::BlockHash,
+    ) -> Signature {
+        let mut cache = elements::sighash::SighashCache::new(tx);
+        let sighash = cache
+            .taproot_key_spend_signature_hash(
+                index,
+                &elements::sighash::Prevouts::All(prevouts),
+                elements::sighash::SchnorrSighashType::Default,
+                genesis,
+            )
+            .expect("prevouts must cover every input");
+        // The output key is the raw account key (no tweak), so the raw
+        // keypair signs the sighash directly.
+        SECP256K1.sign_schnorr_no_aux_rand(
+            &Message::from_digest(sighash.to_byte_array()),
+            &self.keypair,
+        )
+    }
+
+    /// Satisfy every PSET input that is the raw-key P2TR of this venue
+    /// key and not yet final. Returns how many inputs were signed; a PSET
+    /// with none is left untouched. Inputs are recognised by
+    /// `witness_utxo`, so the wallet needs no index of these UTXOs — but
+    /// when any input is ours, every input must carry a `witness_utxo`
+    /// (the sighash commits to all prevouts).
+    pub fn sign_pset_keyspend_inputs(
+        &self,
+        pset: &mut elements::pset::PartiallySignedTransaction,
+        genesis: elements::BlockHash,
+    ) -> anyhow::Result<usize> {
+        let spk = self.p2tr_script_pubkey();
+        let mine: Vec<usize> = pset
+            .inputs()
+            .iter()
+            .enumerate()
+            .filter(|(_, inp)| {
+                inp.final_script_witness.is_none()
+                    && inp
+                        .witness_utxo
+                        .as_ref()
+                        .map(|u| u.script_pubkey == spk)
+                        .unwrap_or(false)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if mine.is_empty() {
+            return Ok(0);
+        }
+        let prevouts: Vec<elements::TxOut> = pset
+            .inputs()
+            .iter()
+            .enumerate()
+            .map(|(i, inp)| {
+                inp.witness_utxo.clone().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "input {i} carries no witness_utxo — required to sign a venue-key input"
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let tx = pset.extract_tx()?;
+        for i in mine.iter().copied() {
+            let sig = self.sign_p2tr_keyspend(&tx, i, &prevouts, genesis);
+            pset.inputs_mut()[i].final_script_witness = Some(vec![sig.as_ref().to_vec()]);
+        }
+        Ok(mine.len())
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -280,6 +369,87 @@ mod tests {
             hex(&mainnet.public_key().serialize()),
             "ef4de5ec56a30bdcf5a078e0111d3ebadba10350cfcb8a272231563f71c3a00b"
         );
+    }
+
+    /// The spend surface: only inputs paying the venue key's raw P2TR are
+    /// signed, foreign inputs stay untouched, re-signing is a no-op, and
+    /// the witness signature verifies against the raw account key over the
+    /// exact Elements taproot sighash — the same script `p2tr_spk_hash`
+    /// commits to.
+    #[test]
+    fn pset_keyspend_signs_only_venue_inputs() {
+        let key = VenueKey::from_seed(&[7u8; 32], Network::LiquidTestnet).unwrap();
+        let spk = key.p2tr_script_pubkey();
+        assert_eq!(spk.len(), 34);
+        assert_eq!(
+            sha(spk.as_bytes()),
+            p2tr_spk_hash(&key.public_key().serialize()),
+            "the spend script must be the script the covenant commits to"
+        );
+
+        let genesis: elements::BlockHash =
+            "a771da8e52ee6ad581ed1e9a99825e5b3b7992225534eaa2ae23244fe26ab1c1"
+                .parse()
+                .unwrap();
+        let asset = elements::AssetId::from_slice(&[0xEE; 32]).unwrap();
+        let mine = elements::TxOut {
+            asset: elements::confidential::Asset::Explicit(asset),
+            value: elements::confidential::Value::Explicit(100_000_000),
+            nonce: elements::confidential::Nonce::Null,
+            script_pubkey: spk.clone(),
+            witness: elements::TxOutWitness::default(),
+        };
+        let foreign = elements::TxOut {
+            script_pubkey: elements::Script::from(vec![0x51, 0x20, 0xAB]),
+            ..mine.clone()
+        };
+
+        let mut pset = elements::pset::PartiallySignedTransaction::new_v2();
+        for (n, utxo) in [(0x11u8, &mine), (0x22u8, &foreign)] {
+            let mut inp = elements::pset::Input::from_prevout(elements::OutPoint {
+                txid: elements::Txid::from_slice(&[n; 32]).unwrap(),
+                vout: 0,
+            });
+            inp.witness_utxo = Some(utxo.clone());
+            pset.add_input(inp);
+        }
+        pset.add_output(elements::pset::Output::new_explicit(
+            spk.clone(),
+            199_000_000,
+            asset,
+            None,
+        ));
+        pset.add_output(elements::pset::Output::new_explicit(
+            elements::Script::new(),
+            1_000_000,
+            asset,
+            None,
+        ));
+
+        assert_eq!(key.sign_pset_keyspend_inputs(&mut pset, genesis).unwrap(), 1);
+        assert!(pset.inputs()[0].final_script_witness.is_some());
+        assert!(pset.inputs()[1].final_script_witness.is_none());
+        assert_eq!(key.sign_pset_keyspend_inputs(&mut pset, genesis).unwrap(), 0);
+
+        let sig_bytes = &pset.inputs()[0].final_script_witness.as_ref().unwrap()[0];
+        let sig = Signature::from_slice(sig_bytes).unwrap();
+        let tx = pset.extract_tx().unwrap();
+        let mut cache = elements::sighash::SighashCache::new(&tx);
+        let sighash = cache
+            .taproot_key_spend_signature_hash(
+                0,
+                &elements::sighash::Prevouts::All(&[mine.clone(), foreign.clone()]),
+                elements::sighash::SchnorrSighashType::Default,
+                genesis,
+            )
+            .unwrap();
+        SECP256K1
+            .verify_schnorr(
+                &sig,
+                &Message::from_digest(sighash.to_byte_array()),
+                &key.public_key(),
+            )
+            .unwrap();
     }
 
     /// Signatures verify against the venue key over the exact digest and

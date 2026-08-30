@@ -38,6 +38,13 @@ pub enum Input {
 
     SignRejected { request_id: String },
 
+    /// Approve a message-signing request. The core signs the digest it
+    /// stored from the server's request with the wallet key — the host
+    /// approves by id and never supplies bytes to sign.
+    SignMessageAccepted { request_id: String },
+
+    SignMessageRejected { request_id: String },
+
     RegisterFcmToken { token: String },
 
     StopSession { session_id: String },
@@ -55,6 +62,9 @@ pub enum Effect {
 
     AddSignRequest { request: wire::SignRequest },
     RemoveSignRequest { request_id: String },
+
+    AddSignMessageRequest { request: wire::SignMessageRequest },
+    RemoveSignMessageRequest { request_id: String },
 
     SessionList { sessions: Vec<wire::Session> },
     SessionCreated { session: wire::Session },
@@ -75,6 +85,7 @@ pub struct WalletConnectCore {
 
     login_requests: BTreeMap<String, wire::LoginRequest>,
     sign_requests: BTreeMap<String, wire::SignRequest>,
+    sign_message_requests: BTreeMap<String, wire::SignMessageRequest>,
 
     user_actions: BTreeMap<wire::ReqId, wire::UserAction>,
     next_action_id: wire::ReqId,
@@ -100,6 +111,7 @@ impl WalletConnectCore {
             wallet_key,
             login_requests: BTreeMap::new(),
             sign_requests: BTreeMap::new(),
+            sign_message_requests: BTreeMap::new(),
             user_actions: BTreeMap::new(),
             // User actions start at 1: id 0 is used by fire-and-forget
             // requests (challenge, login, fcm) whose responses carry no
@@ -141,6 +153,48 @@ impl WalletConnectCore {
         }
     }
 
+    fn sync_sign_message_requests(
+        &mut self,
+        sign_message_requests: Vec<wire::SignMessageRequest>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let old_request_ids = self
+            .sign_message_requests
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let new_request_ids = sign_message_requests
+            .iter()
+            .map(|req| req.request_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        for req_id in old_request_ids.difference(&new_request_ids) {
+            self.sign_message_requests.remove(req_id);
+            effects.push(Effect::RemoveSignMessageRequest {
+                request_id: req_id.clone(),
+            });
+        }
+
+        for sign_req in sign_message_requests {
+            if !self.sign_message_requests.contains_key(&sign_req.request_id) {
+                self.sign_message_requests
+                    .insert(sign_req.request_id.clone(), sign_req.clone());
+                effects.push(Effect::AddSignMessageRequest { request: sign_req });
+            }
+        }
+    }
+
+    fn sign_message_digest(&self, request_id: &str) -> Result<String, String> {
+        let request = self
+            .sign_message_requests
+            .get(request_id)
+            .ok_or("request already removed")?;
+        let mut digest = [0u8; 32];
+        hex::decode_to_slice(&request.digest, &mut digest)
+            .map_err(|_| "digest is not 32 bytes of hex")?;
+        Ok(self.wallet_key.sign_digest(digest).to_string())
+    }
+
     fn handle_response(&mut self, id: wire::ReqId, resp: wire::Resp, effects: &mut Vec<Effect>) {
         match resp {
             wire::Resp::Challenge(resp) => {
@@ -157,6 +211,7 @@ impl WalletConnectCore {
             wire::Resp::Login(wire::LoginResp {
                 sessions,
                 sign_requests,
+                sign_message_requests,
             }) => {
                 self.login_succeed = true;
 
@@ -171,6 +226,7 @@ impl WalletConnectCore {
                 }
 
                 self.sync_sign_requests(sign_requests, effects);
+                self.sync_sign_message_requests(sign_message_requests, effects);
                 effects.push(Effect::SessionList { sessions });
                 self.send_fcm_token(effects);
             }
@@ -225,6 +281,21 @@ impl WalletConnectCore {
             wire::Notif::SignRequestRemoved(n) => {
                 self.sign_requests.remove(&n.request_id);
                 effects.push(Effect::RemoveSignRequest {
+                    request_id: n.request_id,
+                });
+            }
+
+            wire::Notif::SignMessageRequestCreated(notif) => {
+                self.sign_message_requests
+                    .insert(notif.request.request_id.clone(), notif.request.clone());
+                effects.push(Effect::AddSignMessageRequest {
+                    request: notif.request,
+                });
+            }
+
+            wire::Notif::SignMessageRequestRemoved(n) => {
+                self.sign_message_requests.remove(&n.request_id);
+                effects.push(Effect::RemoveSignMessageRequest {
                     request_id: n.request_id,
                 });
             }
@@ -353,6 +424,37 @@ impl WalletConnectCore {
                 self.finish_request(request_id, &mut effects);
             }
 
+            Input::SignMessageAccepted { request_id } => {
+                match self.sign_message_digest(&request_id) {
+                    Ok(signature) => {
+                        self.add_user_action(
+                            wire::UserAction::AcceptSignMessageRequest {
+                                request_id: request_id.clone(),
+                                signature,
+                            },
+                            &mut effects,
+                        );
+                    }
+                    Err(err) => {
+                        // A malformed digest should never reach here (the
+                        // connect server validates it), so drop the approval
+                        // rather than sign something unintended.
+                        log::error!("cannot sign message request {request_id}: {err}");
+                    }
+                }
+                self.finish_request(request_id, &mut effects);
+            }
+
+            Input::SignMessageRejected { request_id } => {
+                self.add_user_action(
+                    wire::UserAction::CancelSignMessageRequest {
+                        request_id: request_id.clone(),
+                    },
+                    &mut effects,
+                );
+                self.finish_request(request_id, &mut effects);
+            }
+
             Input::RegisterFcmToken { token } => {
                 self.fcm_token = Some(token.clone());
                 self.send_fcm_token(&mut effects);
@@ -398,6 +500,13 @@ impl WalletConnectCore {
 
     pub fn get_sign_request(&self, request_id: &str) -> Option<&wire::SignRequest> {
         self.sign_requests.get(request_id)
+    }
+
+    pub fn get_sign_message_request(
+        &self,
+        request_id: &str,
+    ) -> Option<&wire::SignMessageRequest> {
+        self.sign_message_requests.get(request_id)
     }
 }
 
@@ -489,6 +598,126 @@ mod tests {
             request_id: "r9".to_owned(),
         });
         assert!(sent_frames(&accept)[0].contains("dummy-descriptor"));
+    }
+
+    /// A sign-message approval signs the digest STORED from the server's
+    /// request — and the signature verifies against the wallet key over
+    /// exactly that digest. Rejection cancels; an unknown id signs nothing.
+    #[test]
+    fn sign_message_approval_signs_the_stored_digest() {
+        let mut core = core();
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+
+        let digest_hex = "11".repeat(32);
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: format!(
+                    r#"{{"Notif":{{"notif":{{"SignMessageRequestCreated":{{"request":{{"request_id":"s1","domain":"swaption.io","digest":"{digest_hex}","description":"Sell 0.001 BTC","ttl":60000}}}}}}}}}}"#
+                ),
+            },
+        });
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::AddSignMessageRequest { .. })));
+        assert_eq!(
+            core.get_sign_message_request("s1").unwrap().digest,
+            digest_hex
+        );
+
+        // Unknown id: no frame leaves, nothing is signed.
+        let effects = core.handle(Input::SignMessageAccepted {
+            request_id: "nope".to_owned(),
+        });
+        assert!(sent_frames(&effects).is_empty());
+
+        let effects = core.handle(Input::SignMessageAccepted {
+            request_id: "s1".to_owned(),
+        });
+        let frames = sent_frames(&effects);
+        assert_eq!(frames.len(), 1);
+        let frame: wire::To = serde_json::from_str(frames[0]).unwrap();
+        let wire::To::Req { req, .. } = frame;
+        let signature = match req {
+            wire::Req::UserAction(wire::UserActionReq {
+                action:
+                    wire::UserAction::AcceptSignMessageRequest {
+                        request_id,
+                        signature,
+                    },
+            }) => {
+                assert_eq!(request_id, "s1");
+                signature
+            }
+            other => panic!("wrong frame: {other:?}"),
+        };
+        let signature =
+            elements::secp256k1_zkp::schnorr::Signature::from_slice(
+                &hex::decode(signature).unwrap(),
+            )
+            .unwrap();
+        let digest = elements::secp256k1_zkp::Message::from_digest([0x11; 32]);
+        elements::secp256k1_zkp::SECP256K1
+            .verify_schnorr(
+                &signature,
+                &digest,
+                &WalletKey::new(&[7u8; 32], crate::key::Network::LiquidTestnet).public_key(),
+            )
+            .expect("signature must verify against the login key over the digest");
+
+        // Rejection produces a cancel, not a signature.
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: format!(
+                    r#"{{"Notif":{{"notif":{{"SignMessageRequestCreated":{{"request":{{"request_id":"s2","domain":"swaption.io","digest":"{digest_hex}","description":null,"ttl":60000}}}}}}}}}}"#
+                ),
+            },
+        });
+        let effects = core.handle(Input::SignMessageRejected {
+            request_id: "s2".to_owned(),
+        });
+        assert!(sent_frames(&effects)[0].contains("CancelSignMessageRequest"));
+    }
+
+    /// Pending sign-message requests arrive in LoginResp and sync like
+    /// PSET sign requests: new ones surface, gone ones are removed.
+    #[test]
+    fn login_resp_syncs_sign_message_requests() {
+        let mut core = core();
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+        let digest_hex = "22".repeat(32);
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: format!(
+                    r#"{{"Resp":{{"id":0,"resp":{{"Login":{{"sessions":[],"sign_requests":[],"sign_message_requests":[{{"request_id":"p1","domain":"swaption.io","digest":"{digest_hex}","description":"pending order","ttl":60000}}]}}}}}}}}"#
+                ),
+            },
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::AddSignMessageRequest { request } if request.request_id == "p1"
+        )));
+
+        // Relogin without it: the stale request is removed.
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Disconnected,
+        });
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Resp":{"id":0,"resp":{"Login":{"sessions":[],"sign_requests":[]}}}}"#
+                    .to_owned(),
+            },
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::RemoveSignMessageRequest { request_id } if request_id == "p1"
+        )));
     }
 
     /// A mobile-originated request hands the person back to the browser;

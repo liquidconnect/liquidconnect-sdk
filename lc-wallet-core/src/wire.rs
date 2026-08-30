@@ -80,6 +80,21 @@ pub struct SignRequest {
     pub ttl: DurationMs,
 }
 
+/// A request to sign a 32-byte message digest with the wallet's Connect
+/// identity key (no PSET, no transaction). `description` is text the wallet
+/// shows so the user knows what the signature authorises; the wallet signs
+/// `digest` and returns a BIP340 signature verifiable against the
+/// `public_key` it logged in with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignMessageRequest {
+    pub request_id: String,
+    pub domain: String,
+    /// 32-byte digest, hex-encoded (64 chars).
+    pub digest: String,
+    pub description: Option<String>,
+    pub ttl: DurationMs,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UserAction {
     LinkLoginRequest {
@@ -101,6 +116,16 @@ pub enum UserAction {
     },
 
     CancelSignRequest {
+        request_id: String,
+    },
+
+    AcceptSignMessageRequest {
+        request_id: String,
+        /// 64-byte BIP340 signature over the request's digest, hex-encoded.
+        signature: String,
+    },
+
+    CancelSignMessageRequest {
         request_id: String,
     },
 
@@ -132,6 +157,10 @@ pub struct LoginReq {
 pub struct LoginResp {
     pub sessions: Vec<Session>,
     pub sign_requests: Vec<SignRequest>,
+    /// Pending message-signing requests for this wallet. Defaulted for
+    /// compatibility with pre-message connect servers.
+    #[serde(default)]
+    pub sign_message_requests: Vec<SignMessageRequest>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -182,14 +211,29 @@ pub struct SignRequestRemovedNotif {
     pub request_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SignMessageRequestCreatedNotif {
+    pub request: SignMessageRequest,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SignMessageRequestRemovedNotif {
+    pub request_id: String,
+}
+
 // Errors
 
+/// Matches the deployed connect server's wallet-side `ErrorCode`
+/// (`sideswap_api::connect_api`); the catch-all keeps a new server-side
+/// code from turning an error frame into a parse failure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ErrorCode {
+    /// Something wrong with the request arguments.
     InvalidRequest,
-    InternalError,
-    NotFound,
-    Expired,
+    /// Server error.
+    Server,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +268,8 @@ pub enum Notif {
     LoginRequestRemoved(LoginRequestRemovedNotif),
     SignRequestCreated(SignRequestCreatedNotif),
     SignRequestRemoved(SignRequestRemovedNotif),
+    SignMessageRequestCreated(SignMessageRequestCreatedNotif),
+    SignMessageRequestRemoved(SignMessageRequestRemovedNotif),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -282,6 +328,68 @@ mod tests {
             } => {
                 assert_eq!(n.request.request_id, "s1");
                 assert_eq!(n.request.ttl.as_millis(), 60_000);
+            }
+            other => panic!("wrong parse: {other:?}"),
+        }
+    }
+
+    /// The message-signing frames, pinned to the exact fixtures in
+    /// `sideswap_rust`'s `sideswap_api/src/connect_api.rs` — two crates,
+    /// one wire. Never change one side alone.
+    #[test]
+    fn sign_message_wire_shapes() {
+        let to = To::Req {
+            id: 5,
+            req: Req::UserAction(UserActionReq {
+                action: UserAction::AcceptSignMessageRequest {
+                    request_id: "r1".to_owned(),
+                    signature: "ab".repeat(64),
+                },
+            }),
+        };
+        assert_eq!(
+            serde_json::to_string(&to).unwrap(),
+            format!(
+                r#"{{"Req":{{"id":5,"req":{{"UserAction":{{"action":{{"AcceptSignMessageRequest":{{"request_id":"r1","signature":"{}"}}}}}}}}}}}}"#,
+                "ab".repeat(64)
+            )
+        );
+
+        let from: From = serde_json::from_str(
+            r#"{"Notif":{"notif":{"SignMessageRequestCreated":{"request":{"request_id":"s1","domain":"swaption.io","digest":"1111111111111111111111111111111111111111111111111111111111111111","description":"Sell 0.001 BTC","ttl":60000}}}}}"#,
+        )
+        .unwrap();
+        match from {
+            From::Notif {
+                notif: Notif::SignMessageRequestCreated(n),
+            } => {
+                assert_eq!(n.request.request_id, "s1");
+                assert_eq!(n.request.description.as_deref(), Some("Sell 0.001 BTC"));
+                assert_eq!(n.request.ttl.as_millis(), 60_000);
+            }
+            other => panic!("wrong parse: {other:?}"),
+        }
+    }
+
+    /// A pre-message LoginResp (no sign_message_requests field) still parses.
+    #[test]
+    fn login_resp_back_compat() {
+        let resp: LoginResp =
+            serde_json::from_str(r#"{"sessions":[],"sign_requests":[]}"#).unwrap();
+        assert!(resp.sign_message_requests.is_empty());
+    }
+
+    /// Error frames parse even when the server grows a new code.
+    #[test]
+    fn unknown_error_code_still_parses() {
+        let from: From = serde_json::from_str(
+            r#"{"Error":{"id":7,"err":{"code":"SomethingNew","message":"m"}}}"#,
+        )
+        .unwrap();
+        match from {
+            From::Error { id, err } => {
+                assert_eq!(id, 7);
+                assert!(matches!(err.code, ErrorCode::Unknown));
             }
             other => panic!("wrong parse: {other:?}"),
         }
