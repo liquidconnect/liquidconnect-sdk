@@ -26,8 +26,10 @@ per network. The x-only public key **is** the identity — for Connect
 logins and for the identity API alike, which is why a key-proved
 identity and a login-bound one land on the same server-side record.
 
-Two invariants are pinned by tests **in two repos at once** — this SDK
-and `sideswap-io/agentic-wallet-server`:
+Cross-repo pinned invariants — the SDK is now one side of pins in
+**three** repos (`agentic-wallet-server` for identity,
+`rolling-future` for the venue digests). The rule is always the same:
+**never change one side alone.**
 
 - `sign_identity` signs a tagged digest over challenge + action + value.
   The digest test vector (`aa28e11b…`) lives in
@@ -36,6 +38,13 @@ and `sideswap-io/agentic-wallet-server`:
 - When comparing hashes in tests, compare **bytes**
   (`to_byte_array`/`Message::as_ref`), not `Display` — hash newtypes may
   render byte-reversed and the strings will lie to you.
+- `venue` builds the Rolling Future covenant digests (`rf/*`) from typed
+  fields and signs them with `WalletKey::sign_digest`; the vectors are
+  pinned identically in `rolling-future/server`. External services keep
+  arriving as consumers of this signing surface — TetherSwap intends to
+  verify LC-produced signatures **server-side** (pipe-closure signatures
+  on Liquid destination addresses), so keep digest building and signing
+  language-neutral and never assume the verifier is a mobile app.
 
 ## The identity client, in one paragraph
 

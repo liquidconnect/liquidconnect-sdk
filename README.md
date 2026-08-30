@@ -70,6 +70,7 @@ then open https://test.liquidconnect.io, start a connection, and `link` the `req
 | `transport` | Ready-made tokio transport (default feature) |
 | `approval` | A sign request's PSET as structure to render, honest about confidential fields; payjoin-aware annotation |
 | `payjoin` | Client for SideSwap's payjoin service: pay network fees in USDt, no L-BTC needed |
+| `venue` | Rolling Future covenant-digest builders and wallet-key signing (`rf/order/v1`, `rf/withdraw/v1`, `rf/login/v1`) - vectors pinned against the venue server |
 
 ## Flutter
 
