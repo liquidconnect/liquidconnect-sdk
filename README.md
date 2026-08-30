@@ -71,6 +71,14 @@ then open https://test.liquidconnect.io, start a connection, and `link` the `req
 | `approval` | A sign request's PSET as structure to render, honest about confidential fields; payjoin-aware annotation |
 | `payjoin` | Client for SideSwap's payjoin service: pay network fees in USDt, no L-BTC needed |
 
+## Flutter
+
+A Flutter app with a Rust core (the SideSwap pattern) consumes this SDK
+as a plain crate: link `lc-wallet-core` into that core and let events
+ride your existing Dart bridge. The bindings below are for wallets
+without a Rust core; a flutter_rust_bridge package is available on
+demand.
+
 ## Kotlin and Swift
 
 `lc-wallet-ffi` is the uniffi surface over the core — `LiquidConnectWallet`,

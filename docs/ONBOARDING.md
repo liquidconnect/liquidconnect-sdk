@@ -82,14 +82,27 @@ payment address resolves only through a mutual edge.
   gaps before a person is asked to approve. Never render partial sums as
   totals.
 
+## Consuming this from Flutter (the SideSwap way)
+
+SideSwap projects are Flutter over a Rust core (`sideswap_client`:
+cdylib + allo-isolate posting messages into Dart). For those projects
+**do not reach for the Kotlin/Swift bindings at all** — consume this SDK
+as a plain Rust crate inside that existing core: add `lc-wallet-core`
+to the workspace, drive it from the worker, and let its events ride the
+allo-isolate channel the app already has. The uniffi bindings exist for
+third-party wallets with no Rust core of their own; a pure-Dart
+binding (flutter_rust_bridge) is deliberately deferred until a
+Rust-less Flutter wallet actually asks for it.
+
 ## Open edges (good first work)
 
-- Per-platform binding binaries: `cargo-ndk` for Android ABIs, an
-  XCFramework for iOS — CI work, since the dev host has neither NDK nor
-  Xcode. `bindings/README.md` sketches the shape.
-- The identity module is not yet exercised from Kotlin/Swift hosts —
-  the surface exists (`IdentityService`), a real host integration would
-  be its first proof.
+- Wire `lc-wallet-core` (transport + identity) into a Flutter app's
+  Rust core along the path above — the first real host integration and
+  the identity module's first proof from an app.
+- Per-platform binding binaries for the third-party story: `cargo-ndk`
+  for Android ABIs, an XCFramework for iOS — CI work, since the dev
+  host has neither NDK nor Xcode. `bindings/README.md` sketches the
+  shape.
 - The server counterpart lives in `sideswap-io/agentic-wallet-server`;
   the public gateway pages in `sideswap-io/liquidconnect-web`. Ask for
   access if your work touches either.
