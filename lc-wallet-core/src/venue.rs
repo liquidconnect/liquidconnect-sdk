@@ -63,6 +63,7 @@ pub const VENUE_KEY_PURPOSE: u32 = 0x4C43;
 /// seed and network, like the identity key — but, unlike the identity
 /// key, not derivable from anything a wallet exports to watch-only
 /// infrastructure.
+#[derive(Clone)]
 pub struct VenueKey {
     keypair: Keypair,
 }
@@ -259,6 +260,90 @@ pub enum OrderSide {
 /// The chain's genesis hash — Elements taproot sighashes commit to it,
 /// so every venue spend needs it. None for regtest, whose genesis is
 /// per-chain.
+/// Drive a venue's SDK login over HTTPS: fetch a challenge, clear-sign
+/// it as an `rf/login/v1` typed claim with the venue key, and log in —
+/// optionally associating a connect identity (for sign-message/pay
+/// routing) and consuming a browser link code. `venue_host` must be a
+/// BARE host (e.g. from [`crate::link::parse_venue_login_link`], which
+/// refuses anything that could steer this URL); https is constructed
+/// here and nowhere else. Blocking — hosts call it off their UI thread.
+/// Returns the venue's JSON reply (account id, token) on success.
+pub fn sdk_login(
+    venue_host: &str,
+    key: &VenueKey,
+    identity_pk_hex: Option<&str>,
+    link_code: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    anyhow::ensure!(
+        !venue_host.is_empty()
+            && venue_host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'),
+        "venue must be a bare domain name"
+    );
+    let base = format!("https://{venue_host}");
+
+    let challenge = ureq::post(&format!("{base}/api/sdk/challenge"))
+        .timeout(std::time::Duration::from_secs(20))
+        .send_string("")?
+        .into_json::<serde_json::Value>()?
+        .get("challenge")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| anyhow::anyhow!("no challenge in the venue's reply"))?
+        .to_owned();
+
+    let (_digest, sig) = sign_login(key, &challenge);
+    let pk_hex = hex::encode(key.public_key().serialize());
+    let sig_hex = sig.to_string();
+
+    let mut pairs: Vec<(&str, &str)> = vec![
+        ("pk", pk_hex.as_str()),
+        ("sig", sig_hex.as_str()),
+        ("challenge", challenge.as_str()),
+    ];
+    if let Some(id) = identity_pk_hex {
+        pairs.push(("identity", id));
+    }
+    if let Some(code) = link_code {
+        pairs.push(("link", code));
+    }
+    let body = pairs
+        .iter()
+        .map(|(k, v)| {
+            let ev: String = v
+                .bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                        (b as char).to_string()
+                    }
+                    _ => format!("%{b:02X}"),
+                })
+                .collect();
+            format!("{k}={ev}")
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+
+    match ureq::post(&format!("{base}/api/sdk/login"))
+        .timeout(std::time::Duration::from_secs(20))
+        .set("content-type", "application/x-www-form-urlencoded")
+        .send_string(&body)
+    {
+        Ok(r) => {
+            let v = r.into_json::<serde_json::Value>()?;
+            if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                anyhow::bail!("venue refused the login: {err}");
+            }
+            Ok(v)
+        }
+        Err(ureq::Error::Status(code, r)) => {
+            let text = r.into_string().unwrap_or_default();
+            anyhow::bail!("venue refused the login ({code}): {text}")
+        }
+        Err(err) => anyhow::bail!("could not reach the venue: {err}"),
+    }
+}
+
 pub fn genesis_block_hash(network: Network) -> Option<elements::BlockHash> {
     let hex = match network {
         Network::Liquid => "1466275836220db2944ca059a3a10ef6fd2ea684b0688d2c379296888a206003",
