@@ -116,6 +116,16 @@ async fn main() -> anyhow::Result<()> {
                 let genesis = venue::genesis_block_hash(Network::LiquidTestnet)
                     .expect("testnet genesis known");
                 match venue_key.sign_pset_keyspend_inputs(&mut pset, genesis) {
+                    Ok(0) => {
+                        // Nothing here is ours to sign — refuse loudly
+                        // rather than return a signature-less PSET the
+                        // requester can only watch time out.
+                        println!(
+                            "sign request from {}: no input pays this venue key's raw P2TR, rejecting",
+                            req.domain
+                        );
+                        wallet.reject_sign(&req.request_id);
+                    }
                     Ok(signed) => {
                         use base64::Engine as _;
                         let signed_b64 = base64::engine::general_purpose::STANDARD
