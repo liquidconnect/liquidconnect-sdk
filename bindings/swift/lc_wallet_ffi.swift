@@ -811,6 +811,14 @@ public func FfiConverterTypeIdentityService_lower(_ value: IdentityService) -> U
  */
 public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
     
+    /**
+     * Approve a fund request with the funded template the host wallet
+     * built: its own confidential inputs and single blinded change
+     * added, its own inputs signed, nothing else touched. The SDK never
+     * builds the funding; run `verify_fund_template` before showing.
+     */
+    func acceptFund(requestId: String, pset: String) 
+    
     func acceptLogin(requestId: String) 
     
     /**
@@ -846,6 +854,8 @@ public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
     func openLink(url: String) throws 
     
     func registerFcmToken(token: String) 
+    
+    func rejectFund(requestId: String) 
     
     func rejectLogin(requestId: String) 
     
@@ -932,6 +942,20 @@ public convenience init(url: String, descriptor: String, masterBlindingKey: Data
     
 
     
+    /**
+     * Approve a fund request with the funded template the host wallet
+     * built: its own confidential inputs and single blinded change
+     * added, its own inputs signed, nothing else touched. The SDK never
+     * builds the funding; run `verify_fund_template` before showing.
+     */
+open func acceptFund(requestId: String, pset: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_fund(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),
+        FfiConverterString.lower(pset),$0
+    )
+}
+}
+    
 open func acceptLogin(requestId: String)  {try! rustCall() {
     uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_login(self.uniffiClonePointer(),
         FfiConverterString.lower(requestId),$0
@@ -1002,6 +1026,13 @@ open func openLink(url: String)throws   {try rustCallWithError(FfiConverterTypeL
 open func registerFcmToken(token: String)  {try! rustCall() {
     uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_register_fcm_token(self.uniffiClonePointer(),
         FfiConverterString.lower(token),$0
+    )
+}
+}
+    
+open func rejectFund(requestId: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_fund(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),$0
     )
 }
 }
@@ -1631,6 +1662,246 @@ public func FfiConverterTypeDiscoverOutcomeInfo_lift(_ buf: RustBuffer) throws -
 #endif
 public func FfiConverterTypeDiscoverOutcomeInfo_lower(_ value: DiscoverOutcomeInfo) -> RustBuffer {
     return FfiConverterTypeDiscoverOutcomeInfo.lower(value)
+}
+
+
+public struct FundRequestInfo {
+    public var requestId: String
+    public var domain: String
+    /**
+     * The RP-built transaction template, PSET base64. Hosts MUST run the
+     * SDK's `verify_fund_template` (rules: explicit-only template,
+     * deficit == amount, every other asset self-covered) before showing
+     * anything, then fund with their own coins + one blinded change and
+     * sign only their own inputs.
+     */
+    public var template: String
+    /**
+     * Asset id, hex-encoded (64 chars).
+     */
+    public var assetId: String
+    /**
+     * Amount in the asset's satoshi units — the template's deficit.
+     */
+    public var amount: UInt64
+    public var memo: String?
+    public var ttlMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requestId: String, domain: String, 
+        /**
+         * The RP-built transaction template, PSET base64. Hosts MUST run the
+         * SDK's `verify_fund_template` (rules: explicit-only template,
+         * deficit == amount, every other asset self-covered) before showing
+         * anything, then fund with their own coins + one blinded change and
+         * sign only their own inputs.
+         */template: String, 
+        /**
+         * Asset id, hex-encoded (64 chars).
+         */assetId: String, 
+        /**
+         * Amount in the asset's satoshi units — the template's deficit.
+         */amount: UInt64, memo: String?, ttlMs: UInt64) {
+        self.requestId = requestId
+        self.domain = domain
+        self.template = template
+        self.assetId = assetId
+        self.amount = amount
+        self.memo = memo
+        self.ttlMs = ttlMs
+    }
+}
+
+#if compiler(>=6)
+extension FundRequestInfo: Sendable {}
+#endif
+
+
+extension FundRequestInfo: Equatable, Hashable {
+    public static func ==(lhs: FundRequestInfo, rhs: FundRequestInfo) -> Bool {
+        if lhs.requestId != rhs.requestId {
+            return false
+        }
+        if lhs.domain != rhs.domain {
+            return false
+        }
+        if lhs.template != rhs.template {
+            return false
+        }
+        if lhs.assetId != rhs.assetId {
+            return false
+        }
+        if lhs.amount != rhs.amount {
+            return false
+        }
+        if lhs.memo != rhs.memo {
+            return false
+        }
+        if lhs.ttlMs != rhs.ttlMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(requestId)
+        hasher.combine(domain)
+        hasher.combine(template)
+        hasher.combine(assetId)
+        hasher.combine(amount)
+        hasher.combine(memo)
+        hasher.combine(ttlMs)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFundRequestInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FundRequestInfo {
+        return
+            try FundRequestInfo(
+                requestId: FfiConverterString.read(from: &buf), 
+                domain: FfiConverterString.read(from: &buf), 
+                template: FfiConverterString.read(from: &buf), 
+                assetId: FfiConverterString.read(from: &buf), 
+                amount: FfiConverterUInt64.read(from: &buf), 
+                memo: FfiConverterOptionString.read(from: &buf), 
+                ttlMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FundRequestInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.requestId, into: &buf)
+        FfiConverterString.write(value.domain, into: &buf)
+        FfiConverterString.write(value.template, into: &buf)
+        FfiConverterString.write(value.assetId, into: &buf)
+        FfiConverterUInt64.write(value.amount, into: &buf)
+        FfiConverterOptionString.write(value.memo, into: &buf)
+        FfiConverterUInt64.write(value.ttlMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFundRequestInfo_lift(_ buf: RustBuffer) throws -> FundRequestInfo {
+    return try FfiConverterTypeFundRequestInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFundRequestInfo_lower(_ value: FundRequestInfo) -> RustBuffer {
+    return FfiConverterTypeFundRequestInfo.lower(value)
+}
+
+
+/**
+ * What a fund-request template asks for, verified arithmetically —
+ * the numbers are this SDK's computation, never the relying party's.
+ */
+public struct FundTemplateSummary {
+    public var inputCount: UInt32
+    public var outputCount: UInt32
+    /**
+     * The template's explicit fee output, satoshis.
+     */
+    public var fee: UInt64
+    /**
+     * The template's deficit for the requested asset — equal to the
+     * stated amount by construction (a mismatch is an error).
+     */
+    public var deficit: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(inputCount: UInt32, outputCount: UInt32, 
+        /**
+         * The template's explicit fee output, satoshis.
+         */fee: UInt64, 
+        /**
+         * The template's deficit for the requested asset — equal to the
+         * stated amount by construction (a mismatch is an error).
+         */deficit: UInt64) {
+        self.inputCount = inputCount
+        self.outputCount = outputCount
+        self.fee = fee
+        self.deficit = deficit
+    }
+}
+
+#if compiler(>=6)
+extension FundTemplateSummary: Sendable {}
+#endif
+
+
+extension FundTemplateSummary: Equatable, Hashable {
+    public static func ==(lhs: FundTemplateSummary, rhs: FundTemplateSummary) -> Bool {
+        if lhs.inputCount != rhs.inputCount {
+            return false
+        }
+        if lhs.outputCount != rhs.outputCount {
+            return false
+        }
+        if lhs.fee != rhs.fee {
+            return false
+        }
+        if lhs.deficit != rhs.deficit {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(inputCount)
+        hasher.combine(outputCount)
+        hasher.combine(fee)
+        hasher.combine(deficit)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFundTemplateSummary: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FundTemplateSummary {
+        return
+            try FundTemplateSummary(
+                inputCount: FfiConverterUInt32.read(from: &buf), 
+                outputCount: FfiConverterUInt32.read(from: &buf), 
+                fee: FfiConverterUInt64.read(from: &buf), 
+                deficit: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FundTemplateSummary, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.inputCount, into: &buf)
+        FfiConverterUInt32.write(value.outputCount, into: &buf)
+        FfiConverterUInt64.write(value.fee, into: &buf)
+        FfiConverterUInt64.write(value.deficit, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFundTemplateSummary_lift(_ buf: RustBuffer) throws -> FundTemplateSummary {
+    return try FfiConverterTypeFundTemplateSummary.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFundTemplateSummary_lower(_ value: FundTemplateSummary) -> RustBuffer {
+    return FfiConverterTypeFundTemplateSummary.lower(value)
 }
 
 
@@ -2856,6 +3127,10 @@ public enum WalletEvent {
     )
     case payRequestRemoved(requestId: String
     )
+    case fundRequested(request: FundRequestInfo
+    )
+    case fundRequestRemoved(requestId: String
+    )
     case sessions(sessions: [SessionInfo]
     )
     case sessionCreated(session: SessionInfo
@@ -2910,16 +3185,22 @@ public struct FfiConverterTypeWalletEvent: FfiConverterRustBuffer {
         case 11: return .payRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
         )
         
-        case 12: return .sessions(sessions: try FfiConverterSequenceTypeSessionInfo.read(from: &buf)
+        case 12: return .fundRequested(request: try FfiConverterTypeFundRequestInfo.read(from: &buf)
         )
         
-        case 13: return .sessionCreated(session: try FfiConverterTypeSessionInfo.read(from: &buf)
+        case 13: return .fundRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
         )
         
-        case 14: return .sessionRemoved(sessionId: try FfiConverterString.read(from: &buf)
+        case 14: return .sessions(sessions: try FfiConverterSequenceTypeSessionInfo.read(from: &buf)
         )
         
-        case 15: return .minimizeMobileApp
+        case 15: return .sessionCreated(session: try FfiConverterTypeSessionInfo.read(from: &buf)
+        )
+        
+        case 16: return .sessionRemoved(sessionId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 17: return .minimizeMobileApp
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2981,23 +3262,33 @@ public struct FfiConverterTypeWalletEvent: FfiConverterRustBuffer {
             FfiConverterString.write(requestId, into: &buf)
             
         
-        case let .sessions(sessions):
+        case let .fundRequested(request):
             writeInt(&buf, Int32(12))
+            FfiConverterTypeFundRequestInfo.write(request, into: &buf)
+            
+        
+        case let .fundRequestRemoved(requestId):
+            writeInt(&buf, Int32(13))
+            FfiConverterString.write(requestId, into: &buf)
+            
+        
+        case let .sessions(sessions):
+            writeInt(&buf, Int32(14))
             FfiConverterSequenceTypeSessionInfo.write(sessions, into: &buf)
             
         
         case let .sessionCreated(session):
-            writeInt(&buf, Int32(13))
+            writeInt(&buf, Int32(15))
             FfiConverterTypeSessionInfo.write(session, into: &buf)
             
         
         case let .sessionRemoved(sessionId):
-            writeInt(&buf, Int32(14))
+            writeInt(&buf, Int32(16))
             FfiConverterString.write(sessionId, into: &buf)
             
         
         case .minimizeMobileApp:
-            writeInt(&buf, Int32(15))
+            writeInt(&buf, Int32(17))
         
         }
     }
@@ -3273,6 +3564,21 @@ public func summarizePset(psetB64: String, network: Network, payjoinFeeAddress: 
     )
 })
 }
+/**
+ * Verify a fund-request template against the RP's claim BEFORE showing
+ * anything (spec: docs/fund-template-spec.md): explicit-only template,
+ * deficit for `asset_id` exactly `amount`, every other asset (and the
+ * fee) self-covered. An error is a refusal — do not render the request.
+ */
+public func verifyFundTemplate(templateB64: String, assetId: String, amount: UInt64)throws  -> FundTemplateSummary  {
+    return try  FfiConverterTypeFundTemplateSummary_lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_func_verify_fund_template(
+        FfiConverterString.lower(templateB64),
+        FfiConverterString.lower(assetId),
+        FfiConverterUInt64.lower(amount),$0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -3293,6 +3599,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_func_summarize_pset() != 50125) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_func_verify_fund_template() != 20986) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address() != 51379) {
@@ -3334,6 +3643,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_lc_wallet_ffi_checksum_method_identityservice_status() != 59905) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_fund() != 41678) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_login() != 52278) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3353,6 +3665,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_fcm_token() != 65529) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_fund() != 11764) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_login() != 30801) {

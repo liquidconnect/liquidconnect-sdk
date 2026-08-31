@@ -1,10 +1,26 @@
 # Liquid Connect "fund request" (fund-this-template) — design spec
 
-Status: DESIGN 2026-08-31 (Scott's go the same evening, after the live
-e2e test of the two-step deposit). Successor to and generalisation of
-the staging-address deposit; `docs/pay-request-spec.md` is the direct
-predecessor and this follows its conventions. Private repos only until
-Pavel merges (repo rule).
+Status: SDK LAYER BUILT 2026-08-31 (Scott's go the same evening, after
+the live e2e test of the two-step deposit) — wire/core/transport/FFI +
+`approval::verify_fund_template`, 36 tests green. Successor to and
+generalisation of the staging-address deposit;
+`docs/pay-request-spec.md` is the direct predecessor and this follows
+its conventions. Private repos only until Pavel merges (repo rule).
+
+Resolved at design time (driver-side reconnaissance of
+`rolling-future`): the covenant witness is transaction-independent
+(leaf/root/amount only) and the covenant input carries no signature at
+all — its validity is program execution — so the covenant half is fully
+buildable before any funding exists and attachable after, and the
+wallet's SIGHASH_ALL cannot be invalidated by it. The DRIVER pays the
+network fee from its own L-BTC (the wallet may hold none); the wallet's
+change is CONFIDENTIAL (its coins are confidential; the change absorbs
+the blinding-factor sum) while every TEMPLATE row stays explicit —
+`v5/deposit.simf` inspects only input 0 and output 0. Crediting keys on
+`request_id` (double-submit guard) plus the final txid (re-approval
+guard), and the venue broadcasts synchronously at finish before
+journaling — which also retires today's prepare/submit races (the
+seq-9275 class and the driver fee-UTXO substitution hatch).
 
 This is the primitive that lets a relying party hand a connected wallet
 a **partially-built transaction template** and ask the wallet to FUND

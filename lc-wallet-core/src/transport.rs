@@ -38,6 +38,9 @@ pub enum WalletEvent {
     PayRequested(wire::PayRequest),
     PayRequestRemoved { request_id: String },
 
+    FundRequested(wire::FundRequest),
+    FundRequestRemoved { request_id: String },
+
     Sessions(Vec<wire::Session>),
     SessionCreated(wire::Session),
     SessionRemoved { session_id: String },
@@ -145,6 +148,22 @@ impl WalletConnect {
         });
     }
 
+    /// Approve a fund request with the HOST-funded template: wallet
+    /// inputs and one blinded change added, wallet inputs signed. Run
+    /// `approval::verify_fund_template` before ever showing the request.
+    pub fn accept_fund(&self, request_id: &str, pset: &str) {
+        self.send(Input::FundSigned {
+            request_id: request_id.to_owned(),
+            pset: pset.to_owned(),
+        });
+    }
+
+    pub fn reject_fund(&self, request_id: &str) {
+        self.send(Input::FundRejected {
+            request_id: request_id.to_owned(),
+        });
+    }
+
     pub fn stop_session(&self, session_id: &str) {
         self.send(Input::StopSession {
             session_id: session_id.to_owned(),
@@ -192,6 +211,10 @@ fn apply_effects(
             Effect::AddPayRequest { request } => WalletEvent::PayRequested(request),
             Effect::RemovePayRequest { request_id } => {
                 WalletEvent::PayRequestRemoved { request_id }
+            }
+            Effect::AddFundRequest { request } => WalletEvent::FundRequested(request),
+            Effect::RemoveFundRequest { request_id } => {
+                WalletEvent::FundRequestRemoved { request_id }
             }
             Effect::SessionList { sessions } => WalletEvent::Sessions(sessions),
             Effect::SessionCreated { session } => WalletEvent::SessionCreated(session),

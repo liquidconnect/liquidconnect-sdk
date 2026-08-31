@@ -71,6 +71,21 @@ pub enum Input {
 
     PayRejected { request_id: String },
 
+    /// Approve a fund request with the funded template the HOST built:
+    /// the wallet's confidential inputs and single blinded change added,
+    /// the wallet's own inputs signed (SIGHASH_ALL), nothing else
+    /// touched. This crate never builds transactions — the host runs
+    /// `approval::verify_fund_template` before showing anything and its
+    /// own machinery funds the template; the RP finalises its inputs and
+    /// broadcasts. The request must still be live, or nothing is sent.
+    FundSigned {
+        request_id: String,
+        /// The funded template, PSET base64.
+        pset: String,
+    },
+
+    FundRejected { request_id: String },
+
     RegisterFcmToken { token: String },
 
     StopSession { session_id: String },
@@ -95,6 +110,9 @@ pub enum Effect {
     AddPayRequest { request: wire::PayRequest },
     RemovePayRequest { request_id: String },
 
+    AddFundRequest { request: wire::FundRequest },
+    RemoveFundRequest { request_id: String },
+
     SessionList { sessions: Vec<wire::Session> },
     SessionCreated { session: wire::Session },
     SessionRemoved { session_id: String },
@@ -116,6 +134,7 @@ pub struct WalletConnectCore {
     sign_requests: BTreeMap<String, wire::SignRequest>,
     sign_message_requests: BTreeMap<String, wire::SignMessageRequest>,
     pay_requests: BTreeMap<String, wire::PayRequest>,
+    fund_requests: BTreeMap<String, wire::FundRequest>,
 
     user_actions: BTreeMap<wire::ReqId, wire::UserAction>,
     next_action_id: wire::ReqId,
@@ -143,6 +162,7 @@ impl WalletConnectCore {
             sign_requests: BTreeMap::new(),
             sign_message_requests: BTreeMap::new(),
             pay_requests: BTreeMap::new(),
+            fund_requests: BTreeMap::new(),
             user_actions: BTreeMap::new(),
             // User actions start at 1: id 0 is used by fire-and-forget
             // requests (challenge, login, fcm) whose responses carry no
@@ -242,6 +262,33 @@ impl WalletConnectCore {
         }
     }
 
+    fn sync_fund_requests(
+        &mut self,
+        fund_requests: Vec<wire::FundRequest>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let old_request_ids = self.fund_requests.keys().cloned().collect::<BTreeSet<_>>();
+        let new_request_ids = fund_requests
+            .iter()
+            .map(|req| req.request_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        for req_id in old_request_ids.difference(&new_request_ids) {
+            self.fund_requests.remove(req_id);
+            effects.push(Effect::RemoveFundRequest {
+                request_id: req_id.clone(),
+            });
+        }
+
+        for fund_req in fund_requests {
+            if !self.fund_requests.contains_key(&fund_req.request_id) {
+                self.fund_requests
+                    .insert(fund_req.request_id.clone(), fund_req.clone());
+                effects.push(Effect::AddFundRequest { request: fund_req });
+            }
+        }
+    }
+
     fn sign_message_digest(&self, request_id: &str) -> Result<String, String> {
         let request = self
             .sign_message_requests
@@ -271,6 +318,7 @@ impl WalletConnectCore {
                 sign_requests,
                 sign_message_requests,
                 pay_requests,
+                fund_requests,
             }) => {
                 self.login_succeed = true;
 
@@ -287,6 +335,7 @@ impl WalletConnectCore {
                 self.sync_sign_requests(sign_requests, effects);
                 self.sync_sign_message_requests(sign_message_requests, effects);
                 self.sync_pay_requests(pay_requests, effects);
+                self.sync_fund_requests(fund_requests, effects);
                 effects.push(Effect::SessionList { sessions });
                 self.send_fcm_token(effects);
             }
@@ -371,6 +420,21 @@ impl WalletConnectCore {
             wire::Notif::PayRequestRemoved(n) => {
                 self.pay_requests.remove(&n.request_id);
                 effects.push(Effect::RemovePayRequest {
+                    request_id: n.request_id,
+                });
+            }
+
+            wire::Notif::FundRequestCreated(notif) => {
+                self.fund_requests
+                    .insert(notif.request.request_id.clone(), notif.request.clone());
+                effects.push(Effect::AddFundRequest {
+                    request: notif.request,
+                });
+            }
+
+            wire::Notif::FundRequestRemoved(n) => {
+                self.fund_requests.remove(&n.request_id);
+                effects.push(Effect::RemoveFundRequest {
                     request_id: n.request_id,
                 });
             }
@@ -573,6 +637,31 @@ impl WalletConnectCore {
                 self.finish_request(request_id, &mut effects);
             }
 
+            Input::FundSigned { request_id, pset } => {
+                if self.fund_requests.contains_key(&request_id) {
+                    self.add_user_action(
+                        wire::UserAction::AcceptFundRequest {
+                            request_id: request_id.clone(),
+                            pset,
+                        },
+                        &mut effects,
+                    );
+                } else {
+                    log::error!("fund request {request_id} is not live, dropping funded pset");
+                }
+                self.finish_request(request_id, &mut effects);
+            }
+
+            Input::FundRejected { request_id } => {
+                self.add_user_action(
+                    wire::UserAction::CancelFundRequest {
+                        request_id: request_id.clone(),
+                    },
+                    &mut effects,
+                );
+                self.finish_request(request_id, &mut effects);
+            }
+
             Input::RegisterFcmToken { token } => {
                 self.fcm_token = Some(token.clone());
                 self.send_fcm_token(&mut effects);
@@ -629,6 +718,10 @@ impl WalletConnectCore {
 
     pub fn get_pay_request(&self, request_id: &str) -> Option<&wire::PayRequest> {
         self.pay_requests.get(request_id)
+    }
+
+    pub fn get_fund_request(&self, request_id: &str) -> Option<&wire::FundRequest> {
+        self.fund_requests.get(request_id)
     }
 }
 
@@ -912,6 +1005,56 @@ mod tests {
             request_id: "p2".to_owned(),
         });
         assert!(sent_frames(&effects)[0].contains("CancelPayRequest"));
+    }
+
+    /// A fund approval sends the HOST-funded PSET on the accept action —
+    /// the core never builds or blinds; it relays what the host funded,
+    /// and only for a live request.
+    #[test]
+    fn fund_approval_relays_the_host_funded_pset() {
+        let mut core = core();
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Notif":{"notif":{"FundRequestCreated":{"request":{"request_id":"f1","domain":"paper.swaption.io","template":"cHNldP8BAgQCAAAA","asset_id":"2222222222222222222222222222222222222222222222222222222222222222","amount":2499000000,"memo":"Deposit 24.99 USDT into Rolling Future","ttl":180000}}}}}"#.to_owned(),
+            },
+        });
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::AddFundRequest { request } if request.request_id == "f1")));
+        let stored = core.get_fund_request("f1").unwrap();
+        assert_eq!(stored.amount, 2_499_000_000);
+        assert_eq!(stored.template, "cHNldP8BAgQCAAAA");
+
+        // Unknown id: no frame leaves.
+        let effects = core.handle(Input::FundSigned {
+            request_id: "nope".to_owned(),
+            pset: "AAAA".to_owned(),
+        });
+        assert!(sent_frames(&effects).is_empty());
+
+        let effects = core.handle(Input::FundSigned {
+            request_id: "f1".to_owned(),
+            pset: "ZnVuZGVk".to_owned(),
+        });
+        let frames = sent_frames(&effects);
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].contains("AcceptFundRequest"));
+        assert!(frames[0].contains("ZnVuZGVk"));
+
+        // Rejection produces a cancel, not an accept.
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Notif":{"notif":{"FundRequestCreated":{"request":{"request_id":"f2","domain":"paper.swaption.io","template":"cHNldP8BAgQCAAAA","asset_id":"2222222222222222222222222222222222222222222222222222222222222222","amount":1,"memo":null,"ttl":180000}}}}}"#.to_owned(),
+            },
+        });
+        let effects = core.handle(Input::FundRejected {
+            request_id: "f2".to_owned(),
+        });
+        assert!(sent_frames(&effects)[0].contains("CancelFundRequest"));
     }
 
     /// Pending pay requests arrive in LoginResp and sync like the other

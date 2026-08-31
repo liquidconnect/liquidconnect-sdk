@@ -137,6 +137,127 @@ pub fn summarize_pset(pset_b64: &str, network: Network) -> anyhow::Result<Transa
     })
 }
 
+/// What a fund-request template asks for, verified arithmetically.
+/// Returned only when every rule held; the numbers are the wallet's own
+/// computation, never the relying party's words.
+#[derive(Debug, Clone)]
+pub struct FundTemplateSummary {
+    pub input_count: usize,
+    pub output_count: usize,
+    /// The template's explicit fee output, satoshis.
+    pub fee: u64,
+    /// The template's deficit for the requested asset — equal to the
+    /// stated amount by construction (a mismatch is a refusal).
+    pub deficit: u64,
+}
+
+/// Verify a fund-request template against the RP's claim
+/// (spec: docs/fund-template-spec.md, "The wallet's safety rules").
+///
+/// Enforced here, for every host wallet, before anything renders:
+/// 1. every template input carries an EXPLICIT witness_utxo and every
+///    template output is EXPLICIT — anything confidential in the
+///    template is unverifiable and refused;
+/// 2. the template's deficit for `asset_id` (outputs − inputs) equals
+///    `amount` exactly — the stated amount is arithmetic, not advisory;
+/// 3. for every other asset the template covers itself (deficit ≤ 0),
+///    including exactly one explicit fee output — the wallet contributes
+///    only `asset_id`.
+///
+/// What the host adds afterwards (its own confidential inputs and one
+/// blinded change output) is the host's construction; these rules bound
+/// its net outflow to exactly `amount` because its signatures commit to
+/// the whole transaction (SIGHASH_ALL).
+pub fn verify_fund_template(
+    template_b64: &str,
+    asset_id: &str,
+    amount: u64,
+) -> anyhow::Result<FundTemplateSummary> {
+    use std::collections::BTreeMap;
+    use std::str::FromStr as _;
+
+    anyhow::ensure!(amount > 0, "zero amount");
+    let want_asset = elements::AssetId::from_str(asset_id)
+        .map_err(|_| anyhow::anyhow!("asset_id is not a 64-hex asset id"))?;
+
+    let pset = decode_pset(template_b64)?;
+    anyhow::ensure!(
+        !pset.outputs().is_empty(),
+        "template has no outputs"
+    );
+
+    // (in, out) sums per asset, checked arithmetic throughout.
+    let mut sums: BTreeMap<elements::AssetId, (u64, u64)> = BTreeMap::new();
+
+    for (i, input) in pset.inputs().iter().enumerate() {
+        let utxo = input
+            .witness_utxo
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("template input {i} has no witness_utxo"))?;
+        let (asset, value) = match (utxo.asset, utxo.value) {
+            (
+                elements::confidential::Asset::Explicit(asset),
+                elements::confidential::Value::Explicit(value),
+            ) => (asset, value),
+            _ => anyhow::bail!("template input {i} is confidential — unverifiable, refused"),
+        };
+        let entry = sums.entry(asset).or_default();
+        entry.0 = entry
+            .0
+            .checked_add(value)
+            .ok_or_else(|| anyhow::anyhow!("input sum overflow"))?;
+    }
+
+    let mut fee = None;
+    let mut fee_outputs = 0usize;
+    for (i, output) in pset.outputs().iter().enumerate() {
+        let (asset, value) = match (output.asset, output.amount) {
+            (Some(asset), Some(value)) => (asset, value),
+            _ => anyhow::bail!("template output {i} is confidential — unverifiable, refused"),
+        };
+        if output.script_pubkey.is_empty() {
+            fee_outputs += 1;
+            fee = Some(value);
+        }
+        let entry = sums.entry(asset).or_default();
+        entry.1 = entry
+            .1
+            .checked_add(value)
+            .ok_or_else(|| anyhow::anyhow!("output sum overflow"))?;
+    }
+    anyhow::ensure!(
+        fee_outputs == 1,
+        "template must carry exactly one fee output (found {fee_outputs}) — the template pays its own fee"
+    );
+    let fee = fee.expect("fee_outputs == 1");
+    anyhow::ensure!(fee > 0, "template fee output is zero");
+
+    let (asset_in, asset_out) = sums.remove(&want_asset).unwrap_or((0, 0));
+    let deficit = asset_out
+        .checked_sub(asset_in)
+        .ok_or_else(|| anyhow::anyhow!(
+            "template has a surplus of the requested asset — nothing to fund"
+        ))?;
+    anyhow::ensure!(
+        deficit == amount,
+        "stated amount {amount} does not equal the template's deficit {deficit} for the requested asset"
+    );
+
+    for (asset, (asset_in, asset_out)) in sums {
+        anyhow::ensure!(
+            asset_out <= asset_in,
+            "template asks for undeclared funding: asset {asset} outputs {asset_out} exceed inputs {asset_in}"
+        );
+    }
+
+    Ok(FundTemplateSummary {
+        input_count: pset.inputs().len(),
+        output_count: pset.outputs().len(),
+        fee,
+        deficit,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +345,102 @@ mod tests {
             .annotate_payjoin(&PayjoinContext { fee_address: other })
             .unwrap();
         assert_eq!(marked, 0, "a mismatch must be visible, not silent");
+    }
+
+    const POOL_ASSET: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+    fn pset_b64(tx: &pset::PartiallySignedTransaction) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(elements::encode::serialize(tx))
+    }
+
+    fn template_input(asset: &str, value: u64) -> pset::Input {
+        let outpoint = elements::OutPoint::new(elements::Txid::from_str(&"11".repeat(32)).unwrap(), 0);
+        let mut input = pset::Input::from_prevout(outpoint);
+        input.witness_utxo = Some(explicit_txout(asset, value, Script::from(vec![0x51])));
+        input
+    }
+
+    /// A covenant-deposit-shaped template: pool input + fee input, pool
+    /// output grown by the deposit, fee change, explicit fee. The
+    /// stated amount must be the template's own arithmetic.
+    fn deposit_template() -> pset::PartiallySignedTransaction {
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        tx.add_input(template_input(POOL_ASSET, 500));
+        tx.add_input(template_input(TESTNET_LBTC, 1_000));
+        tx.add_output(pset::Output::from_txout(explicit_txout(
+            POOL_ASSET,
+            750,
+            Script::from(vec![0x51, 0x20].into_iter().chain([3u8; 32]).collect::<Vec<u8>>()),
+        )));
+        tx.add_output(pset::Output::from_txout(explicit_txout(
+            TESTNET_LBTC,
+            100,
+            Script::from(vec![0x00, 0x14].into_iter().chain([4u8; 20]).collect::<Vec<u8>>()),
+        )));
+        tx.add_output(pset::Output::from_txout(explicit_txout(
+            TESTNET_LBTC,
+            900,
+            Script::new(),
+        )));
+        tx
+    }
+
+    /// The template's deficit IS the stated amount; everything else is a
+    /// refusal, in the template's own numbers.
+    #[test]
+    fn fund_template_deficit_is_arithmetic_not_advisory() {
+        let b64 = pset_b64(&deposit_template());
+        let summary = verify_fund_template(&b64, POOL_ASSET, 250).unwrap();
+        assert_eq!(summary.deficit, 250);
+        assert_eq!(summary.fee, 900);
+        assert_eq!(summary.input_count, 2);
+        assert_eq!(summary.output_count, 3);
+
+        // The RP's word does not override the arithmetic.
+        let err = verify_fund_template(&b64, POOL_ASSET, 100).unwrap_err();
+        assert!(err.to_string().contains("deficit"), "{err}");
+        // Zero amount is meaningless.
+        assert!(verify_fund_template(&b64, POOL_ASSET, 0).is_err());
+    }
+
+    /// Anything confidential in the template is unverifiable: refuse.
+    #[test]
+    fn fund_template_refuses_confidential_and_missing_utxos() {
+        // Input with no witness_utxo.
+        let mut tx = deposit_template();
+        tx.inputs_mut()[0].witness_utxo = None;
+        let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 250).unwrap_err();
+        assert!(err.to_string().contains("witness_utxo"), "{err}");
+
+        // Confidential output.
+        use elements::secp256k1_zkp::{Generator, PedersenCommitment, Tag, Tweak, SECP256K1};
+        let mut tx = deposit_template();
+        let generator = Generator::new_unblinded(SECP256K1, Tag::from([2u8; 32]));
+        let blinding = Tweak::from_slice(&[1u8; 32]).unwrap();
+        tx.outputs_mut()[1].amount = None;
+        tx.outputs_mut()[1].amount_comm =
+            Some(PedersenCommitment::new(SECP256K1, 100, blinding, generator));
+        let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 250).unwrap_err();
+        assert!(err.to_string().contains("confidential"), "{err}");
+    }
+
+    /// The template funds itself in every asset but the requested one —
+    /// a hidden L-BTC ask is a refusal, and so is a missing or doubled
+    /// fee output.
+    #[test]
+    fn fund_template_refuses_undeclared_asks() {
+        // L-BTC outputs exceed L-BTC inputs: an undeclared ask.
+        let mut tx = deposit_template();
+        tx.outputs_mut()[1].amount = Some(500);
+        let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 250).unwrap_err();
+        assert!(err.to_string().contains("undeclared"), "{err}");
+
+        // No fee output: the template must pay its own fee.
+        let mut tx = deposit_template();
+        tx.outputs_mut()[2].script_pubkey = Script::from(vec![0x51]);
+        let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 250).unwrap_err();
+        assert!(err.to_string().contains("fee output"), "{err}");
     }
 
     /// A blinded output must be reported as unreadable, and the summary

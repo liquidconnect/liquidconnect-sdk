@@ -116,6 +116,29 @@ pub struct PayRequest {
     pub ttl: DurationMs,
 }
 
+/// A relying party's request that the wallet FUND a transaction template
+/// the RP built: add its own confidential inputs and exactly one blinded
+/// change output, sign only its own inputs (SIGHASH_ALL), and return the
+/// funded PSET for the RP to complete and broadcast. The template must be
+/// fully explicit and its per-asset arithmetic must equal the stated
+/// `amount` — see `approval::verify_fund_template`, which every host runs
+/// before showing anything. Spec: docs/fund-template-spec.md.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundRequest {
+    pub request_id: String,
+    pub domain: String,
+    /// The RP-built transaction template, PSET base64.
+    pub template: String,
+    /// Asset id the wallet is asked to contribute, hex-encoded (64 chars).
+    pub asset_id: String,
+    /// Amount in the asset's satoshi units — must equal the template's
+    /// computed deficit for `asset_id` exactly.
+    pub amount: u64,
+    /// Free text shown to the user (e.g. what the funding is for).
+    pub memo: Option<String>,
+    pub ttl: DurationMs,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UserAction {
     LinkLoginRequest {
@@ -160,6 +183,18 @@ pub enum UserAction {
         request_id: String,
     },
 
+    AcceptFundRequest {
+        request_id: String,
+        /// The funded template: wallet inputs and blinded change added,
+        /// wallet inputs signed. PSET base64. The RP finalises its own
+        /// inputs and broadcasts.
+        pset: String,
+    },
+
+    CancelFundRequest {
+        request_id: String,
+    },
+
     StopSession {
         session_id: String,
     },
@@ -196,6 +231,10 @@ pub struct LoginResp {
     /// with pre-pay connect servers.
     #[serde(default)]
     pub pay_requests: Vec<PayRequest>,
+    /// Pending fund requests for this wallet. Defaulted for compatibility
+    /// with pre-fund connect servers.
+    #[serde(default)]
+    pub fund_requests: Vec<FundRequest>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -266,6 +305,16 @@ pub struct PayRequestRemovedNotif {
     pub request_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FundRequestCreatedNotif {
+    pub request: FundRequest,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FundRequestRemovedNotif {
+    pub request_id: String,
+}
+
 // Errors
 
 /// Matches the deployed connect server's wallet-side `ErrorCode`
@@ -317,6 +366,8 @@ pub enum Notif {
     SignMessageRequestRemoved(SignMessageRequestRemovedNotif),
     PayRequestCreated(PayRequestCreatedNotif),
     PayRequestRemoved(PayRequestRemovedNotif),
+    FundRequestCreated(FundRequestCreatedNotif),
+    FundRequestRemoved(FundRequestRemovedNotif),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -466,6 +517,53 @@ mod tests {
             }
             other => panic!("wrong parse: {other:?}"),
         }
+    }
+
+    /// The fund-request frames, pinned like the pay frames — two crates,
+    /// one wire (`sideswap_api/src/connect_api.rs`). Never change one
+    /// side alone.
+    #[test]
+    fn fund_request_wire_shapes() {
+        // Wallet -> server: the template was funded and the wallet's own
+        // inputs signed; the RP finalises and broadcasts.
+        let to = To::Req {
+            id: 9,
+            req: Req::UserAction(UserActionReq {
+                action: UserAction::AcceptFundRequest {
+                    request_id: "f1".to_owned(),
+                    pset: "cHNldP8BAgQCAAAA".to_owned(),
+                },
+            }),
+        };
+        assert_eq!(
+            serde_json::to_string(&to).unwrap(),
+            r#"{"Req":{"id":9,"req":{"UserAction":{"action":{"AcceptFundRequest":{"request_id":"f1","pset":"cHNldP8BAgQCAAAA"}}}}}}"#,
+        );
+
+        // Server -> wallet: a created request carrying the template and
+        // the RP's claim about it.
+        let from: From = serde_json::from_str(
+            r#"{"Notif":{"notif":{"FundRequestCreated":{"request":{"request_id":"f1","domain":"paper.swaption.io","template":"cHNldP8BAgQCAAAA","asset_id":"2222222222222222222222222222222222222222222222222222222222222222","amount":2499000000,"memo":"Deposit 24.99 USDT into Rolling Future","ttl":180000}}}}}"#,
+        )
+        .unwrap();
+        match from {
+            From::Notif {
+                notif: Notif::FundRequestCreated(n),
+            } => {
+                assert_eq!(n.request.request_id, "f1");
+                assert_eq!(n.request.template, "cHNldP8BAgQCAAAA");
+                assert_eq!(n.request.amount, 2_499_000_000);
+                assert_eq!(n.request.ttl.as_millis(), 180_000);
+            }
+            other => panic!("wrong parse: {other:?}"),
+        }
+
+        // A pre-fund LoginResp still parses (serde default).
+        let resp: LoginResp = serde_json::from_str(
+            r#"{"sessions":[],"sign_requests":[]}"#,
+        )
+        .unwrap();
+        assert!(resp.fund_requests.is_empty());
     }
 
     /// Error frames parse even when the server grows a new code.

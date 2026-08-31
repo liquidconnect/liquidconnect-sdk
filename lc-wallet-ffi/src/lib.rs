@@ -91,6 +91,24 @@ pub struct PayRequestInfo {
 }
 
 #[derive(uniffi::Record)]
+pub struct FundRequestInfo {
+    pub request_id: String,
+    pub domain: String,
+    /// The RP-built transaction template, PSET base64. Hosts MUST run the
+    /// SDK's `verify_fund_template` (rules: explicit-only template,
+    /// deficit == amount, every other asset self-covered) before showing
+    /// anything, then fund with their own coins + one blinded change and
+    /// sign only their own inputs.
+    pub template: String,
+    /// Asset id, hex-encoded (64 chars).
+    pub asset_id: String,
+    /// Amount in the asset's satoshi units — the template's deficit.
+    pub amount: u64,
+    pub memo: Option<String>,
+    pub ttl_ms: u64,
+}
+
+#[derive(uniffi::Record)]
 pub struct SessionInfo {
     pub session_id: String,
     pub domain: String,
@@ -110,6 +128,8 @@ pub enum WalletEvent {
     SignMessageRequestRemoved { request_id: String },
     PayRequested { request: PayRequestInfo },
     PayRequestRemoved { request_id: String },
+    FundRequested { request: FundRequestInfo },
+    FundRequestRemoved { request_id: String },
     Sessions { sessions: Vec<SessionInfo> },
     SessionCreated { session: SessionInfo },
     SessionRemoved { session_id: String },
@@ -175,6 +195,20 @@ fn map_event(event: transport::WalletEvent) -> WalletEvent {
         },
         transport::WalletEvent::PayRequestRemoved { request_id } => {
             WalletEvent::PayRequestRemoved { request_id }
+        }
+        transport::WalletEvent::FundRequested(r) => WalletEvent::FundRequested {
+            request: FundRequestInfo {
+                request_id: r.request_id,
+                domain: r.domain,
+                template: r.template,
+                asset_id: r.asset_id,
+                amount: r.amount,
+                memo: r.memo,
+                ttl_ms: r.ttl.as_millis(),
+            },
+        },
+        transport::WalletEvent::FundRequestRemoved { request_id } => {
+            WalletEvent::FundRequestRemoved { request_id }
         }
         transport::WalletEvent::Sessions(s) => WalletEvent::Sessions {
             sessions: s.into_iter().map(session_info).collect(),
@@ -298,6 +332,18 @@ impl LiquidConnectWallet {
         self.handle.reject_pay(&request_id);
     }
 
+    /// Approve a fund request with the funded template the host wallet
+    /// built: its own confidential inputs and single blinded change
+    /// added, its own inputs signed, nothing else touched. The SDK never
+    /// builds the funding; run `verify_fund_template` before showing.
+    pub fn accept_fund(&self, request_id: String, pset: String) {
+        self.handle.accept_fund(&request_id, &pset);
+    }
+
+    pub fn reject_fund(&self, request_id: String) {
+        self.handle.reject_fund(&request_id);
+    }
+
     pub fn reject_sign(&self, request_id: String) {
         self.handle.reject_sign(&request_id);
     }
@@ -373,6 +419,39 @@ pub fn summarize_pset(
             .collect(),
         fee: summary.fee,
         fully_explicit: summary.fully_explicit,
+    })
+}
+
+/// What a fund-request template asks for, verified arithmetically —
+/// the numbers are this SDK's computation, never the relying party's.
+#[derive(uniffi::Record)]
+pub struct FundTemplateSummary {
+    pub input_count: u32,
+    pub output_count: u32,
+    /// The template's explicit fee output, satoshis.
+    pub fee: u64,
+    /// The template's deficit for the requested asset — equal to the
+    /// stated amount by construction (a mismatch is an error).
+    pub deficit: u64,
+}
+
+/// Verify a fund-request template against the RP's claim BEFORE showing
+/// anything (spec: docs/fund-template-spec.md): explicit-only template,
+/// deficit for `asset_id` exactly `amount`, every other asset (and the
+/// fee) self-covered. An error is a refusal — do not render the request.
+#[uniffi::export]
+pub fn verify_fund_template(
+    template_b64: String,
+    asset_id: String,
+    amount: u64,
+) -> Result<FundTemplateSummary, LcError> {
+    let summary =
+        lc_wallet_core::approval::verify_fund_template(&template_b64, &asset_id, amount)?;
+    Ok(FundTemplateSummary {
+        input_count: summary.input_count as u32,
+        output_count: summary.output_count as u32,
+        fee: summary.fee,
+        deficit: summary.deficit,
     })
 }
 

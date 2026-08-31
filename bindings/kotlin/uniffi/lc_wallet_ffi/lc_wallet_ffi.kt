@@ -798,6 +798,12 @@ internal open class UniffiVTableCallbackInterfaceWalletEventListener(
 
 
 
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -816,6 +822,8 @@ internal interface IntegrityCheckingUniffiLib : Library {
     fun uniffi_lc_wallet_ffi_checksum_func_random_install_id_hex(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_func_summarize_pset(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_func_verify_fund_template(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address(
 ): Short
@@ -843,6 +851,8 @@ fun uniffi_lc_wallet_ffi_checksum_method_identityservice_set_discoverability(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_identityservice_status(
 ): Short
+fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_fund(
+): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_login(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_pay(
@@ -856,6 +866,8 @@ fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign_message
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_open_link(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_fcm_token(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_fund(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_login(
 ): Short
@@ -961,6 +973,8 @@ fun uniffi_lc_wallet_ffi_fn_free_liquidconnectwallet(`ptr`: Pointer,uniffi_out_e
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_constructor_liquidconnectwallet_new(`url`: RustBuffer.ByValue,`descriptor`: RustBuffer.ByValue,`masterBlindingKey`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,`installIdHex`: RustBuffer.ByValue,`listener`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
+fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_fund(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,`pset`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_login(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_pay(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,`txid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -974,6 +988,8 @@ fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_sign_message_signe
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_open_link(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_register_fcm_token(`ptr`: Pointer,`token`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_fund(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_login(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -996,6 +1012,8 @@ fun uniffi_lc_wallet_ffi_fn_method_walleteventlistener_on_event(`ptr`: Pointer,`
 fun uniffi_lc_wallet_ffi_fn_func_random_install_id_hex(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_lc_wallet_ffi_fn_func_summarize_pset(`psetB64`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,`payjoinFeeAddress`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_func_verify_fund_template(`templateB64`: RustBuffer.ByValue,`assetId`: RustBuffer.ByValue,`amount`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun ffi_lc_wallet_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1129,6 +1147,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_lc_wallet_ffi_checksum_func_summarize_pset() != 50125.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lc_wallet_ffi_checksum_func_verify_fund_template() != 20986.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address() != 51379.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1168,6 +1189,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_status() != 59905.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_fund() != 41678.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_login() != 52278.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1187,6 +1211,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_fcm_token() != 65529.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_fund() != 11764.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_login() != 30801.toShort()) {
@@ -2089,6 +2116,14 @@ public object FfiConverterTypeIdentityService: FfiConverter<IdentityService, Poi
  */
 public interface LiquidConnectWalletInterface {
     
+    /**
+     * Approve a fund request with the funded template the host wallet
+     * built: its own confidential inputs and single blinded change
+     * added, its own inputs signed, nothing else touched. The SDK never
+     * builds the funding; run `verify_fund_template` before showing.
+     */
+    fun `acceptFund`(`requestId`: kotlin.String, `pset`: kotlin.String)
+    
     fun `acceptLogin`(`requestId`: kotlin.String)
     
     /**
@@ -2124,6 +2159,8 @@ public interface LiquidConnectWalletInterface {
     fun `openLink`(`url`: kotlin.String)
     
     fun `registerFcmToken`(`token`: kotlin.String)
+    
+    fun `rejectFund`(`requestId`: kotlin.String)
     
     fun `rejectLogin`(`requestId`: kotlin.String)
     
@@ -2236,6 +2273,23 @@ open class LiquidConnectWallet: Disposable, AutoCloseable, LiquidConnectWalletIn
         }
     }
 
+    
+    /**
+     * Approve a fund request with the funded template the host wallet
+     * built: its own confidential inputs and single blinded change
+     * added, its own inputs signed, nothing else touched. The SDK never
+     * builds the funding; run `verify_fund_template` before showing.
+     */override fun `acceptFund`(`requestId`: kotlin.String, `pset`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_fund(
+        it, FfiConverterString.lower(`requestId`),FfiConverterString.lower(`pset`),_status)
+}
+    }
+    
+    
+
     override fun `acceptLogin`(`requestId`: kotlin.String)
         = 
     callWithPointer {
@@ -2331,6 +2385,17 @@ open class LiquidConnectWallet: Disposable, AutoCloseable, LiquidConnectWalletIn
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_register_fcm_token(
         it, FfiConverterString.lower(`token`),_status)
+}
+    }
+    
+    
+
+    override fun `rejectFund`(`requestId`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_fund(
+        it, FfiConverterString.lower(`requestId`),_status)
 }
     }
     
@@ -2865,6 +2930,122 @@ public object FfiConverterTypeDiscoverOutcomeInfo: FfiConverterRustBuffer<Discov
     override fun write(value: DiscoverOutcomeInfo, buf: ByteBuffer) {
             FfiConverterSequenceTypeContactMatchInfo.write(value.`matched`, buf)
             FfiConverterSequenceUInt.write(value.`unparsedInputIndexes`, buf)
+    }
+}
+
+
+
+data class FundRequestInfo (
+    var `requestId`: kotlin.String, 
+    var `domain`: kotlin.String, 
+    /**
+     * The RP-built transaction template, PSET base64. Hosts MUST run the
+     * SDK's `verify_fund_template` (rules: explicit-only template,
+     * deficit == amount, every other asset self-covered) before showing
+     * anything, then fund with their own coins + one blinded change and
+     * sign only their own inputs.
+     */
+    var `template`: kotlin.String, 
+    /**
+     * Asset id, hex-encoded (64 chars).
+     */
+    var `assetId`: kotlin.String, 
+    /**
+     * Amount in the asset's satoshi units — the template's deficit.
+     */
+    var `amount`: kotlin.ULong, 
+    var `memo`: kotlin.String?, 
+    var `ttlMs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFundRequestInfo: FfiConverterRustBuffer<FundRequestInfo> {
+    override fun read(buf: ByteBuffer): FundRequestInfo {
+        return FundRequestInfo(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FundRequestInfo) = (
+            FfiConverterString.allocationSize(value.`requestId`) +
+            FfiConverterString.allocationSize(value.`domain`) +
+            FfiConverterString.allocationSize(value.`template`) +
+            FfiConverterString.allocationSize(value.`assetId`) +
+            FfiConverterULong.allocationSize(value.`amount`) +
+            FfiConverterOptionalString.allocationSize(value.`memo`) +
+            FfiConverterULong.allocationSize(value.`ttlMs`)
+    )
+
+    override fun write(value: FundRequestInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`requestId`, buf)
+            FfiConverterString.write(value.`domain`, buf)
+            FfiConverterString.write(value.`template`, buf)
+            FfiConverterString.write(value.`assetId`, buf)
+            FfiConverterULong.write(value.`amount`, buf)
+            FfiConverterOptionalString.write(value.`memo`, buf)
+            FfiConverterULong.write(value.`ttlMs`, buf)
+    }
+}
+
+
+
+/**
+ * What a fund-request template asks for, verified arithmetically —
+ * the numbers are this SDK's computation, never the relying party's.
+ */
+data class FundTemplateSummary (
+    var `inputCount`: kotlin.UInt, 
+    var `outputCount`: kotlin.UInt, 
+    /**
+     * The template's explicit fee output, satoshis.
+     */
+    var `fee`: kotlin.ULong, 
+    /**
+     * The template's deficit for the requested asset — equal to the
+     * stated amount by construction (a mismatch is an error).
+     */
+    var `deficit`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFundTemplateSummary: FfiConverterRustBuffer<FundTemplateSummary> {
+    override fun read(buf: ByteBuffer): FundTemplateSummary {
+        return FundTemplateSummary(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FundTemplateSummary) = (
+            FfiConverterUInt.allocationSize(value.`inputCount`) +
+            FfiConverterUInt.allocationSize(value.`outputCount`) +
+            FfiConverterULong.allocationSize(value.`fee`) +
+            FfiConverterULong.allocationSize(value.`deficit`)
+    )
+
+    override fun write(value: FundTemplateSummary, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`inputCount`, buf)
+            FfiConverterUInt.write(value.`outputCount`, buf)
+            FfiConverterULong.write(value.`fee`, buf)
+            FfiConverterULong.write(value.`deficit`, buf)
     }
 }
 
@@ -3484,6 +3665,16 @@ sealed class WalletEvent {
         companion object
     }
     
+    data class FundRequested(
+        val `request`: FundRequestInfo) : WalletEvent() {
+        companion object
+    }
+    
+    data class FundRequestRemoved(
+        val `requestId`: kotlin.String) : WalletEvent() {
+        companion object
+    }
+    
     data class Sessions(
         val `sessions`: List<SessionInfo>) : WalletEvent() {
         companion object
@@ -3540,16 +3731,22 @@ public object FfiConverterTypeWalletEvent : FfiConverterRustBuffer<WalletEvent>{
             11 -> WalletEvent.PayRequestRemoved(
                 FfiConverterString.read(buf),
                 )
-            12 -> WalletEvent.Sessions(
-                FfiConverterSequenceTypeSessionInfo.read(buf),
+            12 -> WalletEvent.FundRequested(
+                FfiConverterTypeFundRequestInfo.read(buf),
                 )
-            13 -> WalletEvent.SessionCreated(
-                FfiConverterTypeSessionInfo.read(buf),
-                )
-            14 -> WalletEvent.SessionRemoved(
+            13 -> WalletEvent.FundRequestRemoved(
                 FfiConverterString.read(buf),
                 )
-            15 -> WalletEvent.MinimizeMobileApp
+            14 -> WalletEvent.Sessions(
+                FfiConverterSequenceTypeSessionInfo.read(buf),
+                )
+            15 -> WalletEvent.SessionCreated(
+                FfiConverterTypeSessionInfo.read(buf),
+                )
+            16 -> WalletEvent.SessionRemoved(
+                FfiConverterString.read(buf),
+                )
+            17 -> WalletEvent.MinimizeMobileApp
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -3623,6 +3820,20 @@ public object FfiConverterTypeWalletEvent : FfiConverterRustBuffer<WalletEvent>{
             )
         }
         is WalletEvent.PayRequestRemoved -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`requestId`)
+            )
+        }
+        is WalletEvent.FundRequested -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeFundRequestInfo.allocationSize(value.`request`)
+            )
+        }
+        is WalletEvent.FundRequestRemoved -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
@@ -3712,23 +3923,33 @@ public object FfiConverterTypeWalletEvent : FfiConverterRustBuffer<WalletEvent>{
                 FfiConverterString.write(value.`requestId`, buf)
                 Unit
             }
-            is WalletEvent.Sessions -> {
+            is WalletEvent.FundRequested -> {
                 buf.putInt(12)
+                FfiConverterTypeFundRequestInfo.write(value.`request`, buf)
+                Unit
+            }
+            is WalletEvent.FundRequestRemoved -> {
+                buf.putInt(13)
+                FfiConverterString.write(value.`requestId`, buf)
+                Unit
+            }
+            is WalletEvent.Sessions -> {
+                buf.putInt(14)
                 FfiConverterSequenceTypeSessionInfo.write(value.`sessions`, buf)
                 Unit
             }
             is WalletEvent.SessionCreated -> {
-                buf.putInt(13)
+                buf.putInt(15)
                 FfiConverterTypeSessionInfo.write(value.`session`, buf)
                 Unit
             }
             is WalletEvent.SessionRemoved -> {
-                buf.putInt(14)
+                buf.putInt(16)
                 FfiConverterString.write(value.`sessionId`, buf)
                 Unit
             }
             is WalletEvent.MinimizeMobileApp -> {
-                buf.putInt(15)
+                buf.putInt(17)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -4025,6 +4246,22 @@ public object FfiConverterSequenceTypeSessionInfo: FfiConverterRustBuffer<List<S
     uniffiRustCallWithError(LcException) { _status ->
     UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_func_summarize_pset(
         FfiConverterString.lower(`psetB64`),FfiConverterTypeNetwork.lower(`network`),FfiConverterOptionalString.lower(`payjoinFeeAddress`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify a fund-request template against the RP's claim BEFORE showing
+         * anything (spec: docs/fund-template-spec.md): explicit-only template,
+         * deficit for `asset_id` exactly `amount`, every other asset (and the
+         * fee) self-covered. An error is a refusal — do not render the request.
+         */
+    @Throws(LcException::class) fun `verifyFundTemplate`(`templateB64`: kotlin.String, `assetId`: kotlin.String, `amount`: kotlin.ULong): FundTemplateSummary {
+            return FfiConverterTypeFundTemplateSummary.lift(
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_func_verify_fund_template(
+        FfiConverterString.lower(`templateB64`),FfiConverterString.lower(`assetId`),FfiConverterULong.lower(`amount`),_status)
 }
     )
     }
