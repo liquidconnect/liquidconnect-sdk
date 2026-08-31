@@ -75,6 +75,22 @@ pub struct SignMessageRequestInfo {
 }
 
 #[derive(uniffi::Record)]
+pub struct PayRequestInfo {
+    pub request_id: String,
+    pub domain: String,
+    /// Liquid address the payment goes to. The intent is advisory: the
+    /// host builds the real spend from the wallet's own coins and renders
+    /// what it actually built (recipient, amount, fee) for approval.
+    pub recipient: String,
+    /// Asset id, hex-encoded (64 chars).
+    pub asset_id: String,
+    /// Amount in the asset's satoshi units.
+    pub amount: u64,
+    pub memo: Option<String>,
+    pub ttl_ms: u64,
+}
+
+#[derive(uniffi::Record)]
 pub struct SessionInfo {
     pub session_id: String,
     pub domain: String,
@@ -92,6 +108,8 @@ pub enum WalletEvent {
     SignRequestRemoved { request_id: String },
     SignMessageRequested { request: SignMessageRequestInfo },
     SignMessageRequestRemoved { request_id: String },
+    PayRequested { request: PayRequestInfo },
+    PayRequestRemoved { request_id: String },
     Sessions { sessions: Vec<SessionInfo> },
     SessionCreated { session: SessionInfo },
     SessionRemoved { session_id: String },
@@ -143,6 +161,20 @@ fn map_event(event: transport::WalletEvent) -> WalletEvent {
         },
         transport::WalletEvent::SignMessageRequestRemoved { request_id } => {
             WalletEvent::SignMessageRequestRemoved { request_id }
+        }
+        transport::WalletEvent::PayRequested(r) => WalletEvent::PayRequested {
+            request: PayRequestInfo {
+                request_id: r.request_id,
+                domain: r.domain,
+                recipient: r.recipient,
+                asset_id: r.asset_id,
+                amount: r.amount,
+                memo: r.memo,
+                ttl_ms: r.ttl.as_millis(),
+            },
+        },
+        transport::WalletEvent::PayRequestRemoved { request_id } => {
+            WalletEvent::PayRequestRemoved { request_id }
         }
         transport::WalletEvent::Sessions(s) => WalletEvent::Sessions {
             sessions: s.into_iter().map(session_info).collect(),
@@ -253,6 +285,17 @@ impl LiquidConnectWallet {
 
     pub fn reject_sign_message(&self, request_id: String) {
         self.handle.reject_sign_message(&request_id);
+    }
+
+    /// Approve a pay request with the txid of the payment the host wallet
+    /// built, signed and broadcast itself from its own coins. The SDK
+    /// never builds the transaction.
+    pub fn accept_pay(&self, request_id: String, txid: String) {
+        self.handle.accept_pay(&request_id, &txid);
+    }
+
+    pub fn reject_pay(&self, request_id: String) {
+        self.handle.reject_pay(&request_id);
     }
 
     pub fn reject_sign(&self, request_id: String) {

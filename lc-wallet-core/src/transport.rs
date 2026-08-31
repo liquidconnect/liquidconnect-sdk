@@ -35,6 +35,9 @@ pub enum WalletEvent {
     SignMessageRequested(wire::SignMessageRequest),
     SignMessageRequestRemoved { request_id: String },
 
+    PayRequested(wire::PayRequest),
+    PayRequestRemoved { request_id: String },
+
     Sessions(Vec<wire::Session>),
     SessionCreated(wire::Session),
     SessionRemoved { session_id: String },
@@ -125,6 +128,23 @@ impl WalletConnect {
         });
     }
 
+    /// Approve a pay request with the txid of the payment the wallet
+    /// built, signed and broadcast itself. This SDK never builds the
+    /// transaction — the host's send machinery does, renders the real
+    /// recipient/amount/fee for the user, and hands back only the txid.
+    pub fn accept_pay(&self, request_id: &str, txid: &str) {
+        self.send(Input::PayBuilt {
+            request_id: request_id.to_owned(),
+            txid: txid.to_owned(),
+        });
+    }
+
+    pub fn reject_pay(&self, request_id: &str) {
+        self.send(Input::PayRejected {
+            request_id: request_id.to_owned(),
+        });
+    }
+
     pub fn stop_session(&self, session_id: &str) {
         self.send(Input::StopSession {
             session_id: session_id.to_owned(),
@@ -168,6 +188,10 @@ fn apply_effects(
             }
             Effect::RemoveSignMessageRequest { request_id } => {
                 WalletEvent::SignMessageRequestRemoved { request_id }
+            }
+            Effect::AddPayRequest { request } => WalletEvent::PayRequested(request),
+            Effect::RemovePayRequest { request_id } => {
+                WalletEvent::PayRequestRemoved { request_id }
             }
             Effect::SessionList { sessions } => WalletEvent::Sessions(sessions),
             Effect::SessionCreated { session } => WalletEvent::SessionCreated(session),

@@ -94,20 +94,12 @@ async fn main() -> anyhow::Result<()> {
                             wallet.reject_sign_message(&req.request_id);
                             continue;
                         }
-                        let (_d, signature) = match typed {
-                            venue::TypedRequest::Order {
-                                side,
-                                price,
-                                qty,
-                                expiry,
-                                nonce,
-                                ..
-                            } => venue::sign_order(&venue_key, side, price, qty, expiry, nonce),
-                            venue::TypedRequest::Withdraw { amt, root } => {
-                                venue::sign_withdraw(&venue_key, amt, &root)
-                            }
-                            venue::TypedRequest::Login { challenge } => {
-                                venue::sign_login(&venue_key, &challenge)
+                        let (_d, signature) = match venue_key.sign_typed(&typed) {
+                            Ok(signed) => signed,
+                            Err(err) => {
+                                println!("cannot sign typed request ({err}): rejecting");
+                                wallet.reject_sign_message(&req.request_id);
+                                continue;
                             }
                         };
                         println!("typed request verified: venue key signs");

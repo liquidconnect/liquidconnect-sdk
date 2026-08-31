@@ -814,6 +814,13 @@ public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
     func acceptLogin(requestId: String) 
     
     /**
+     * Approve a pay request with the txid of the payment the host wallet
+     * built, signed and broadcast itself from its own coins. The SDK
+     * never builds the transaction.
+     */
+    func acceptPay(requestId: String, txid: String) 
+    
+    /**
      * The PSET must already be verified and signed by the host wallet.
      */
     func acceptSign(requestId: String, signedPset: String) 
@@ -841,6 +848,8 @@ public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
     func registerFcmToken(token: String) 
     
     func rejectLogin(requestId: String) 
+    
+    func rejectPay(requestId: String) 
     
     func rejectSign(requestId: String) 
     
@@ -931,6 +940,19 @@ open func acceptLogin(requestId: String)  {try! rustCall() {
 }
     
     /**
+     * Approve a pay request with the txid of the payment the host wallet
+     * built, signed and broadcast itself from its own coins. The SDK
+     * never builds the transaction.
+     */
+open func acceptPay(requestId: String, txid: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_pay(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),
+        FfiConverterString.lower(txid),$0
+    )
+}
+}
+    
+    /**
      * The PSET must already be verified and signed by the host wallet.
      */
 open func acceptSign(requestId: String, signedPset: String)  {try! rustCall() {
@@ -986,6 +1008,13 @@ open func registerFcmToken(token: String)  {try! rustCall() {
     
 open func rejectLogin(requestId: String)  {try! rustCall() {
     uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_login(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),$0
+    )
+}
+}
+    
+open func rejectPay(requestId: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_pay(self.uniffiClonePointer(),
         FfiConverterString.lower(requestId),$0
     )
 }
@@ -1879,6 +1908,138 @@ public func FfiConverterTypeOutputSummary_lower(_ value: OutputSummary) -> RustB
 }
 
 
+public struct PayRequestInfo {
+    public var requestId: String
+    public var domain: String
+    /**
+     * Liquid address the payment goes to. The intent is advisory: the
+     * host builds the real spend from the wallet's own coins and renders
+     * what it actually built (recipient, amount, fee) for approval.
+     */
+    public var recipient: String
+    /**
+     * Asset id, hex-encoded (64 chars).
+     */
+    public var assetId: String
+    /**
+     * Amount in the asset's satoshi units.
+     */
+    public var amount: UInt64
+    public var memo: String?
+    public var ttlMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requestId: String, domain: String, 
+        /**
+         * Liquid address the payment goes to. The intent is advisory: the
+         * host builds the real spend from the wallet's own coins and renders
+         * what it actually built (recipient, amount, fee) for approval.
+         */recipient: String, 
+        /**
+         * Asset id, hex-encoded (64 chars).
+         */assetId: String, 
+        /**
+         * Amount in the asset's satoshi units.
+         */amount: UInt64, memo: String?, ttlMs: UInt64) {
+        self.requestId = requestId
+        self.domain = domain
+        self.recipient = recipient
+        self.assetId = assetId
+        self.amount = amount
+        self.memo = memo
+        self.ttlMs = ttlMs
+    }
+}
+
+#if compiler(>=6)
+extension PayRequestInfo: Sendable {}
+#endif
+
+
+extension PayRequestInfo: Equatable, Hashable {
+    public static func ==(lhs: PayRequestInfo, rhs: PayRequestInfo) -> Bool {
+        if lhs.requestId != rhs.requestId {
+            return false
+        }
+        if lhs.domain != rhs.domain {
+            return false
+        }
+        if lhs.recipient != rhs.recipient {
+            return false
+        }
+        if lhs.assetId != rhs.assetId {
+            return false
+        }
+        if lhs.amount != rhs.amount {
+            return false
+        }
+        if lhs.memo != rhs.memo {
+            return false
+        }
+        if lhs.ttlMs != rhs.ttlMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(requestId)
+        hasher.combine(domain)
+        hasher.combine(recipient)
+        hasher.combine(assetId)
+        hasher.combine(amount)
+        hasher.combine(memo)
+        hasher.combine(ttlMs)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePayRequestInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PayRequestInfo {
+        return
+            try PayRequestInfo(
+                requestId: FfiConverterString.read(from: &buf), 
+                domain: FfiConverterString.read(from: &buf), 
+                recipient: FfiConverterString.read(from: &buf), 
+                assetId: FfiConverterString.read(from: &buf), 
+                amount: FfiConverterUInt64.read(from: &buf), 
+                memo: FfiConverterOptionString.read(from: &buf), 
+                ttlMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PayRequestInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.requestId, into: &buf)
+        FfiConverterString.write(value.domain, into: &buf)
+        FfiConverterString.write(value.recipient, into: &buf)
+        FfiConverterString.write(value.assetId, into: &buf)
+        FfiConverterUInt64.write(value.amount, into: &buf)
+        FfiConverterOptionString.write(value.memo, into: &buf)
+        FfiConverterUInt64.write(value.ttlMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePayRequestInfo_lift(_ buf: RustBuffer) throws -> PayRequestInfo {
+    return try FfiConverterTypePayRequestInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePayRequestInfo_lower(_ value: PayRequestInfo) -> RustBuffer {
+    return FfiConverterTypePayRequestInfo.lower(value)
+}
+
+
 public struct PhoneQuoteInfo {
     public var orderId: String
     public var priceSats: UInt64
@@ -2669,6 +2830,10 @@ public enum WalletEvent {
     )
     case signMessageRequestRemoved(requestId: String
     )
+    case payRequested(request: PayRequestInfo
+    )
+    case payRequestRemoved(requestId: String
+    )
     case sessions(sessions: [SessionInfo]
     )
     case sessionCreated(session: SessionInfo
@@ -2717,16 +2882,22 @@ public struct FfiConverterTypeWalletEvent: FfiConverterRustBuffer {
         case 9: return .signMessageRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
         )
         
-        case 10: return .sessions(sessions: try FfiConverterSequenceTypeSessionInfo.read(from: &buf)
+        case 10: return .payRequested(request: try FfiConverterTypePayRequestInfo.read(from: &buf)
         )
         
-        case 11: return .sessionCreated(session: try FfiConverterTypeSessionInfo.read(from: &buf)
+        case 11: return .payRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
         )
         
-        case 12: return .sessionRemoved(sessionId: try FfiConverterString.read(from: &buf)
+        case 12: return .sessions(sessions: try FfiConverterSequenceTypeSessionInfo.read(from: &buf)
         )
         
-        case 13: return .minimizeMobileApp
+        case 13: return .sessionCreated(session: try FfiConverterTypeSessionInfo.read(from: &buf)
+        )
+        
+        case 14: return .sessionRemoved(sessionId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 15: return .minimizeMobileApp
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2778,23 +2949,33 @@ public struct FfiConverterTypeWalletEvent: FfiConverterRustBuffer {
             FfiConverterString.write(requestId, into: &buf)
             
         
-        case let .sessions(sessions):
+        case let .payRequested(request):
             writeInt(&buf, Int32(10))
+            FfiConverterTypePayRequestInfo.write(request, into: &buf)
+            
+        
+        case let .payRequestRemoved(requestId):
+            writeInt(&buf, Int32(11))
+            FfiConverterString.write(requestId, into: &buf)
+            
+        
+        case let .sessions(sessions):
+            writeInt(&buf, Int32(12))
             FfiConverterSequenceTypeSessionInfo.write(sessions, into: &buf)
             
         
         case let .sessionCreated(session):
-            writeInt(&buf, Int32(11))
+            writeInt(&buf, Int32(13))
             FfiConverterTypeSessionInfo.write(session, into: &buf)
             
         
         case let .sessionRemoved(sessionId):
-            writeInt(&buf, Int32(12))
+            writeInt(&buf, Int32(14))
             FfiConverterString.write(sessionId, into: &buf)
             
         
         case .minimizeMobileApp:
-            writeInt(&buf, Int32(13))
+            writeInt(&buf, Int32(15))
         
         }
     }
@@ -3134,6 +3315,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_login() != 52278) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_pay() != 61374) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign() != 843) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3150,6 +3334,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_login() != 30801) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_pay() != 25349) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_sign() != 29787) {

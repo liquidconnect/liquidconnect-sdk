@@ -95,6 +95,27 @@ pub struct SignMessageRequest {
     pub ttl: DurationMs,
 }
 
+/// A relying party's request that the wallet PAY: build a transaction to
+/// `recipient` for `amount` of `asset_id` from the wallet's own coins, show
+/// the real constructed send (recipient, amount, network fee) for approval,
+/// sign and broadcast it. The intent is advisory — the wallet renders what it
+/// actually built; only the wallet holds the keys and blinding factors, so
+/// nothing else can construct this spend. The reply is the broadcast txid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayRequest {
+    pub request_id: String,
+    pub domain: String,
+    /// Liquid address (confidential or not) the payment goes to.
+    pub recipient: String,
+    /// Asset id, hex-encoded (64 chars).
+    pub asset_id: String,
+    /// Amount in the asset's satoshi units.
+    pub amount: u64,
+    /// Free text shown to the user (e.g. what the payment is for).
+    pub memo: Option<String>,
+    pub ttl: DurationMs,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UserAction {
     LinkLoginRequest {
@@ -126,6 +147,16 @@ pub enum UserAction {
     },
 
     CancelSignMessageRequest {
+        request_id: String,
+    },
+
+    AcceptPayRequest {
+        request_id: String,
+        /// Txid of the broadcast payment, hex-encoded (64 chars).
+        txid: String,
+    },
+
+    CancelPayRequest {
         request_id: String,
     },
 
@@ -161,6 +192,10 @@ pub struct LoginResp {
     /// compatibility with pre-message connect servers.
     #[serde(default)]
     pub sign_message_requests: Vec<SignMessageRequest>,
+    /// Pending pay requests for this wallet. Defaulted for compatibility
+    /// with pre-pay connect servers.
+    #[serde(default)]
+    pub pay_requests: Vec<PayRequest>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -221,6 +256,16 @@ pub struct SignMessageRequestRemovedNotif {
     pub request_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PayRequestCreatedNotif {
+    pub request: PayRequest,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PayRequestRemovedNotif {
+    pub request_id: String,
+}
+
 // Errors
 
 /// Matches the deployed connect server's wallet-side `ErrorCode`
@@ -270,6 +315,8 @@ pub enum Notif {
     SignRequestRemoved(SignRequestRemovedNotif),
     SignMessageRequestCreated(SignMessageRequestCreatedNotif),
     SignMessageRequestRemoved(SignMessageRequestRemovedNotif),
+    PayRequestCreated(PayRequestCreatedNotif),
+    PayRequestRemoved(PayRequestRemovedNotif),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -377,6 +424,48 @@ mod tests {
         let resp: LoginResp =
             serde_json::from_str(r#"{"sessions":[],"sign_requests":[]}"#).unwrap();
         assert!(resp.sign_message_requests.is_empty());
+        assert!(resp.pay_requests.is_empty());
+    }
+
+    /// The pay-request frames, pinned to the exact fixtures in
+    /// `sideswap_rust`'s `sideswap_api/src/connect_api.rs` — two crates,
+    /// one wire. Never change one side alone.
+    #[test]
+    fn pay_request_wire_shapes() {
+        // Wallet -> server: the payment was built, signed and broadcast.
+        let to = To::Req {
+            id: 7,
+            req: Req::UserAction(UserActionReq {
+                action: UserAction::AcceptPayRequest {
+                    request_id: "p1".to_owned(),
+                    txid: "cd".repeat(32),
+                },
+            }),
+        };
+        assert_eq!(
+            serde_json::to_string(&to).unwrap(),
+            format!(
+                r#"{{"Req":{{"id":7,"req":{{"UserAction":{{"action":{{"AcceptPayRequest":{{"request_id":"p1","txid":"{}"}}}}}}}}}}}}"#,
+                "cd".repeat(32)
+            )
+        );
+
+        // Server -> wallet: a created request carrying the pay intent.
+        let from: From = serde_json::from_str(
+            r#"{"Notif":{"notif":{"PayRequestCreated":{"request":{"request_id":"p1","domain":"swaption.io","recipient":"tlq1qqw508d6qejxtdg4y5r3zarvary0c5xw7kct5v9fs","asset_id":"2222222222222222222222222222222222222222222222222222222222222222","amount":100000,"memo":"RF deposit","ttl":120000}}}}}"#,
+        )
+        .unwrap();
+        match from {
+            From::Notif {
+                notif: Notif::PayRequestCreated(n),
+            } => {
+                assert_eq!(n.request.request_id, "p1");
+                assert_eq!(n.request.amount, 100_000);
+                assert_eq!(n.request.memo.as_deref(), Some("RF deposit"));
+                assert_eq!(n.request.ttl.as_millis(), 120_000);
+            }
+            other => panic!("wrong parse: {other:?}"),
+        }
     }
 
     /// Error frames parse even when the server grows a new code.

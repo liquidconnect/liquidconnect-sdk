@@ -57,6 +57,20 @@ pub enum Input {
 
     SignMessageRejected { request_id: String },
 
+    /// Approve a pay request with the txid of the payment the HOST built,
+    /// signed and broadcast from the wallet's own coins. This crate never
+    /// builds transactions: the host's send machinery constructs the spend,
+    /// renders the real recipient/amount/fee for the user, and hands back
+    /// only the broadcast txid. The request must still be live, or nothing
+    /// is sent.
+    PayBuilt {
+        request_id: String,
+        /// Txid of the broadcast payment, hex-encoded (64 chars).
+        txid: String,
+    },
+
+    PayRejected { request_id: String },
+
     RegisterFcmToken { token: String },
 
     StopSession { session_id: String },
@@ -78,6 +92,9 @@ pub enum Effect {
     AddSignMessageRequest { request: wire::SignMessageRequest },
     RemoveSignMessageRequest { request_id: String },
 
+    AddPayRequest { request: wire::PayRequest },
+    RemovePayRequest { request_id: String },
+
     SessionList { sessions: Vec<wire::Session> },
     SessionCreated { session: wire::Session },
     SessionRemoved { session_id: String },
@@ -98,6 +115,7 @@ pub struct WalletConnectCore {
     login_requests: BTreeMap<String, wire::LoginRequest>,
     sign_requests: BTreeMap<String, wire::SignRequest>,
     sign_message_requests: BTreeMap<String, wire::SignMessageRequest>,
+    pay_requests: BTreeMap<String, wire::PayRequest>,
 
     user_actions: BTreeMap<wire::ReqId, wire::UserAction>,
     next_action_id: wire::ReqId,
@@ -124,6 +142,7 @@ impl WalletConnectCore {
             login_requests: BTreeMap::new(),
             sign_requests: BTreeMap::new(),
             sign_message_requests: BTreeMap::new(),
+            pay_requests: BTreeMap::new(),
             user_actions: BTreeMap::new(),
             // User actions start at 1: id 0 is used by fire-and-forget
             // requests (challenge, login, fcm) whose responses carry no
@@ -196,6 +215,33 @@ impl WalletConnectCore {
         }
     }
 
+    fn sync_pay_requests(
+        &mut self,
+        pay_requests: Vec<wire::PayRequest>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let old_request_ids = self.pay_requests.keys().cloned().collect::<BTreeSet<_>>();
+        let new_request_ids = pay_requests
+            .iter()
+            .map(|req| req.request_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        for req_id in old_request_ids.difference(&new_request_ids) {
+            self.pay_requests.remove(req_id);
+            effects.push(Effect::RemovePayRequest {
+                request_id: req_id.clone(),
+            });
+        }
+
+        for pay_req in pay_requests {
+            if !self.pay_requests.contains_key(&pay_req.request_id) {
+                self.pay_requests
+                    .insert(pay_req.request_id.clone(), pay_req.clone());
+                effects.push(Effect::AddPayRequest { request: pay_req });
+            }
+        }
+    }
+
     fn sign_message_digest(&self, request_id: &str) -> Result<String, String> {
         let request = self
             .sign_message_requests
@@ -224,6 +270,7 @@ impl WalletConnectCore {
                 sessions,
                 sign_requests,
                 sign_message_requests,
+                pay_requests,
             }) => {
                 self.login_succeed = true;
 
@@ -239,6 +286,7 @@ impl WalletConnectCore {
 
                 self.sync_sign_requests(sign_requests, effects);
                 self.sync_sign_message_requests(sign_message_requests, effects);
+                self.sync_pay_requests(pay_requests, effects);
                 effects.push(Effect::SessionList { sessions });
                 self.send_fcm_token(effects);
             }
@@ -308,6 +356,21 @@ impl WalletConnectCore {
             wire::Notif::SignMessageRequestRemoved(n) => {
                 self.sign_message_requests.remove(&n.request_id);
                 effects.push(Effect::RemoveSignMessageRequest {
+                    request_id: n.request_id,
+                });
+            }
+
+            wire::Notif::PayRequestCreated(notif) => {
+                self.pay_requests
+                    .insert(notif.request.request_id.clone(), notif.request.clone());
+                effects.push(Effect::AddPayRequest {
+                    request: notif.request,
+                });
+            }
+
+            wire::Notif::PayRequestRemoved(n) => {
+                self.pay_requests.remove(&n.request_id);
+                effects.push(Effect::RemovePayRequest {
                     request_id: n.request_id,
                 });
             }
@@ -485,6 +548,31 @@ impl WalletConnectCore {
                 self.finish_request(request_id, &mut effects);
             }
 
+            Input::PayBuilt { request_id, txid } => {
+                if self.pay_requests.contains_key(&request_id) {
+                    self.add_user_action(
+                        wire::UserAction::AcceptPayRequest {
+                            request_id: request_id.clone(),
+                            txid,
+                        },
+                        &mut effects,
+                    );
+                } else {
+                    log::error!("pay request {request_id} is not live, dropping txid");
+                }
+                self.finish_request(request_id, &mut effects);
+            }
+
+            Input::PayRejected { request_id } => {
+                self.add_user_action(
+                    wire::UserAction::CancelPayRequest {
+                        request_id: request_id.clone(),
+                    },
+                    &mut effects,
+                );
+                self.finish_request(request_id, &mut effects);
+            }
+
             Input::RegisterFcmToken { token } => {
                 self.fcm_token = Some(token.clone());
                 self.send_fcm_token(&mut effects);
@@ -537,6 +625,10 @@ impl WalletConnectCore {
         request_id: &str,
     ) -> Option<&wire::SignMessageRequest> {
         self.sign_message_requests.get(request_id)
+    }
+
+    pub fn get_pay_request(&self, request_id: &str) -> Option<&wire::PayRequest> {
+        self.pay_requests.get(request_id)
     }
 }
 
@@ -769,6 +861,93 @@ mod tests {
         assert!(effects.iter().any(|e| matches!(
             e,
             Effect::RemoveSignMessageRequest { request_id } if request_id == "p1"
+        )));
+    }
+
+    /// A pay approval sends the HOST-built txid on the accept action — the
+    /// core stores the intent, never builds anything, refuses a dead id,
+    /// and cancels on rejection.
+    #[test]
+    fn pay_approval_relays_the_host_built_txid() {
+        let mut core = core();
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Notif":{"notif":{"PayRequestCreated":{"request":{"request_id":"p1","domain":"swaption.io","recipient":"tlq1qqw508d6qejxtdg4y5r3zarvary0c5xw7kct5v9fs","asset_id":"2222222222222222222222222222222222222222222222222222222222222222","amount":100000,"memo":"RF deposit","ttl":120000}}}}}"#.to_owned(),
+            },
+        });
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::AddPayRequest { request } if request.request_id == "p1")));
+        let stored = core.get_pay_request("p1").unwrap();
+        assert_eq!(stored.amount, 100_000);
+        assert_eq!(stored.memo.as_deref(), Some("RF deposit"));
+
+        // Unknown id: no frame leaves.
+        let effects = core.handle(Input::PayBuilt {
+            request_id: "nope".to_owned(),
+            txid: "cd".repeat(32),
+        });
+        assert!(sent_frames(&effects).is_empty());
+
+        let effects = core.handle(Input::PayBuilt {
+            request_id: "p1".to_owned(),
+            txid: "cd".repeat(32),
+        });
+        let frames = sent_frames(&effects);
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].contains("AcceptPayRequest"));
+        assert!(frames[0].contains(&"cd".repeat(32)));
+
+        // Rejection produces a cancel, not an accept.
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Notif":{"notif":{"PayRequestCreated":{"request":{"request_id":"p2","domain":"swaption.io","recipient":"tlq1qqw508d6qejxtdg4y5r3zarvary0c5xw7kct5v9fs","asset_id":"2222222222222222222222222222222222222222222222222222222222222222","amount":1,"memo":null,"ttl":120000}}}}}"#.to_owned(),
+            },
+        });
+        let effects = core.handle(Input::PayRejected {
+            request_id: "p2".to_owned(),
+        });
+        assert!(sent_frames(&effects)[0].contains("CancelPayRequest"));
+    }
+
+    /// Pending pay requests arrive in LoginResp and sync like the other
+    /// request kinds: new ones surface, gone ones are removed.
+    #[test]
+    fn login_resp_syncs_pay_requests() {
+        let mut core = core();
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Resp":{"id":0,"resp":{"Login":{"sessions":[],"sign_requests":[],"pay_requests":[{"request_id":"p1","domain":"swaption.io","recipient":"tlq1qqw508d6qejxtdg4y5r3zarvary0c5xw7kct5v9fs","asset_id":"2222222222222222222222222222222222222222222222222222222222222222","amount":100000,"memo":null,"ttl":60000}]}}}}"#.to_owned(),
+            },
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::AddPayRequest { request } if request.request_id == "p1"
+        )));
+
+        // Relogin without it: the stale request is removed.
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Disconnected,
+        });
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Resp":{"id":0,"resp":{"Login":{"sessions":[],"sign_requests":[]}}}}"#
+                    .to_owned(),
+            },
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::RemovePayRequest { request_id } if request_id == "p1"
         )));
     }
 

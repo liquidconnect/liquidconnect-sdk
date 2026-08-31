@@ -178,20 +178,12 @@ async fn main() -> anyhow::Result<()> {
                             }
                             let venue_key =
                                 venue::VenueKey::from_seed(&SEED, Network::LiquidTestnet).unwrap();
-                            let (_digest, signature) = match typed_request {
-                                venue::TypedRequest::Order {
-                                    side,
-                                    price,
-                                    qty,
-                                    expiry,
-                                    nonce,
-                                    ..
-                                } => venue::sign_order(&venue_key, side, price, qty, expiry, nonce),
-                                venue::TypedRequest::Withdraw { amt, root } => {
-                                    venue::sign_withdraw(&venue_key, amt, &root)
-                                }
-                                venue::TypedRequest::Login { challenge } => {
-                                    venue::sign_login(&venue_key, &challenge)
+                            let (_digest, signature) = match venue_key.sign_typed(&typed_request) {
+                                Ok(signed) => signed,
+                                Err(err) => {
+                                    println!("wallet: cannot sign typed request ({err}), rejecting");
+                                    wallet_task.reject_sign_message(&req.request_id);
+                                    continue;
                                 }
                             };
                             println!("wallet: typed venue request verified, clear-signing");
