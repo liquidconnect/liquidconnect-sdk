@@ -16,18 +16,41 @@ cargo run -p lc-wallet-ffi --features cli --bin uniffi-bindgen -- \
 The host app links the bindings against the compiled library:
 
 - **Android**: build `lc-wallet-ffi` as a `cdylib` per ABI with
-  `cargo-ndk` (arm64-v8a, armeabi-v7a, x86_64), ship the `.so` files in
-  `jniLibs`, drop `bindings/kotlin` into the source set, and add
-  `net.java.dev.jna:jna` — uniffi's Kotlin runtime loads the library via
-  JNA.
+  `cargo-ndk` (arm64-v8a, armeabi-v7a, x86, x86_64), ship the `.so`
+  files in `jniLibs`, drop `bindings/kotlin` into the source set, and
+  add `net.java.dev.jna:jna` — uniffi's Kotlin runtime loads the
+  library via JNA.
 - **iOS**: build `staticlib` for `aarch64-apple-ios` (+ simulator),
   wrap in an XCFramework with `lc_wallet_ffiFFI.h` and the modulemap,
   and add `lc_wallet_ffi.swift` to the target.
 
-Cross-compiled artifacts are not produced in this repo yet — this host
-has no NDK or Xcode. The bindings themselves and the host-side API are
-final; producing per-platform binaries is CI work, tracked in the SDK
-decision doc.
+The Android libraries need an Android NDK, the four Rust targets, and
+`cargo-ndk`. Nothing in the crate is platform-specific and the C
+dependencies (`secp256k1-zkp`, `ring`) build with NDK clang, so this
+cross-compiles the same way from Linux, macOS, or Windows:
+
+```
+rustup target add aarch64-linux-android armv7-linux-androideabi \
+  i686-linux-android x86_64-linux-android
+cargo install cargo-ndk
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 \
+  -o ./jniLibs build --release -p lc-wallet-ffi
+```
+
+`cargo-ndk` locates the NDK through `ANDROID_NDK_HOME`, or through an
+SDK install via `ANDROID_SDK_ROOT`/`ANDROID_HOME`. The four ABIs above
+are verified with NDK r27 and cargo-ndk 4.1.2; r29 checked on arm64.
+
+It also passes `-Wl,-z,max-page-size=16384` for you, which is what makes
+the 64-bit `.so` files loadable on Android 15+ devices with 16 KB pages.
+Driving the NDK linker by hand instead — `CARGO_TARGET_*_LINKER` with
+`CC_*`/`AR_*` — produces 4 KB-aligned libraries that load everywhere
+else and fail there, so on that path add the flag yourself with
+`RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"`.
+
+Per-platform binaries are not committed; every consumer builds them from
+source, and release builds are CI work tracked in the SDK decision doc.
+The bindings themselves and the host-side API are final.
 
 Host-side contract, in one paragraph: construct `LiquidConnectWallet`
 with the master blinding key, network, a persisted install id, and a
