@@ -153,6 +153,25 @@ async fn main() -> anyhow::Result<()> {
                             wallet.reject_sign_message(&req.request_id);
                             continue;
                         }
+                        // The clear-sign check above proves the claim is
+                        // internally consistent, not that its destination
+                        // is one the user WANTS to pay — in the real app
+                        // that judgment is the human reading "To:". A
+                        // bench has no human, so it fails closed on any
+                        // destination other than the one the drill named
+                        // (proven live: a venue bug once asked this bench
+                        // to withdraw to another wallet's address, and it
+                        // signed).
+                        if let venue::TypedRequest::Withdraw { dest, .. } = &typed
+                            && let Ok(expected) = std::env::var("LC_EXPECTED_WITHDRAW_DEST")
+                            && *dest != expected
+                        {
+                            println!(
+                                "withdraw dest {dest} is not the expected {expected}: rejecting"
+                            );
+                            wallet.reject_sign_message(&req.request_id);
+                            continue;
+                        }
                         let (_d, signature) = match venue_key.sign_typed(&typed) {
                             Ok(signed) => signed,
                             Err(err) => {
