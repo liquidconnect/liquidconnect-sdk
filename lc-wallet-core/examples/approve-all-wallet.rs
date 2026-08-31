@@ -194,6 +194,18 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+            WalletEvent::PayRequested(req) => {
+                // This bench has no transaction builder — the SDK
+                // deliberately doesn't build; a real host's send
+                // machinery does. Log the intent (proves delivery
+                // intact) and refuse, so the requester falls back
+                // immediately instead of waiting out the TTL.
+                println!(
+                    "pay request from {}: {} of {} to {} memo {:?} — no builder here, rejecting",
+                    req.domain, req.amount, req.asset_id, req.recipient, req.memo
+                );
+                wallet.reject_pay(&req.request_id);
+            }
             other => println!("event: {other:?}"),
         }
     }
