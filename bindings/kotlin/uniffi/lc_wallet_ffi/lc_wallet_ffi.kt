@@ -2874,7 +2874,12 @@ data class IdentityStatusInfo (
     var `identityId`: kotlin.String?, 
     var `email`: kotlin.Boolean, 
     var `phone`: kotlin.Boolean, 
-    var `handle`: kotlin.String?
+    var `handle`: kotlin.String?, 
+    /**
+     * Opt-in discovery switches, as the directory holds them now.
+     */
+    var `discoverableByContact`: kotlin.Boolean, 
+    var `discoverableByHandle`: kotlin.Boolean
 ) {
     
     companion object
@@ -2890,6 +2895,8 @@ public object FfiConverterTypeIdentityStatusInfo: FfiConverterRustBuffer<Identit
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -2897,7 +2904,9 @@ public object FfiConverterTypeIdentityStatusInfo: FfiConverterRustBuffer<Identit
             FfiConverterOptionalString.allocationSize(value.`identityId`) +
             FfiConverterBoolean.allocationSize(value.`email`) +
             FfiConverterBoolean.allocationSize(value.`phone`) +
-            FfiConverterOptionalString.allocationSize(value.`handle`)
+            FfiConverterOptionalString.allocationSize(value.`handle`) +
+            FfiConverterBoolean.allocationSize(value.`discoverableByContact`) +
+            FfiConverterBoolean.allocationSize(value.`discoverableByHandle`)
     )
 
     override fun write(value: IdentityStatusInfo, buf: ByteBuffer) {
@@ -2905,6 +2914,8 @@ public object FfiConverterTypeIdentityStatusInfo: FfiConverterRustBuffer<Identit
             FfiConverterBoolean.write(value.`email`, buf)
             FfiConverterBoolean.write(value.`phone`, buf)
             FfiConverterOptionalString.write(value.`handle`, buf)
+            FfiConverterBoolean.write(value.`discoverableByContact`, buf)
+            FfiConverterBoolean.write(value.`discoverableByHandle`, buf)
     }
 }
 

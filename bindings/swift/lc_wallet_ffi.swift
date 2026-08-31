@@ -1639,14 +1639,24 @@ public struct IdentityStatusInfo {
     public var email: Bool
     public var phone: Bool
     public var handle: String?
+    /**
+     * Opt-in discovery switches, as the directory holds them now.
+     */
+    public var discoverableByContact: Bool
+    public var discoverableByHandle: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(identityId: String?, email: Bool, phone: Bool, handle: String?) {
+    public init(identityId: String?, email: Bool, phone: Bool, handle: String?, 
+        /**
+         * Opt-in discovery switches, as the directory holds them now.
+         */discoverableByContact: Bool, discoverableByHandle: Bool) {
         self.identityId = identityId
         self.email = email
         self.phone = phone
         self.handle = handle
+        self.discoverableByContact = discoverableByContact
+        self.discoverableByHandle = discoverableByHandle
     }
 }
 
@@ -1669,6 +1679,12 @@ extension IdentityStatusInfo: Equatable, Hashable {
         if lhs.handle != rhs.handle {
             return false
         }
+        if lhs.discoverableByContact != rhs.discoverableByContact {
+            return false
+        }
+        if lhs.discoverableByHandle != rhs.discoverableByHandle {
+            return false
+        }
         return true
     }
 
@@ -1677,6 +1693,8 @@ extension IdentityStatusInfo: Equatable, Hashable {
         hasher.combine(email)
         hasher.combine(phone)
         hasher.combine(handle)
+        hasher.combine(discoverableByContact)
+        hasher.combine(discoverableByHandle)
     }
 }
 
@@ -1692,7 +1710,9 @@ public struct FfiConverterTypeIdentityStatusInfo: FfiConverterRustBuffer {
                 identityId: FfiConverterOptionString.read(from: &buf), 
                 email: FfiConverterBool.read(from: &buf), 
                 phone: FfiConverterBool.read(from: &buf), 
-                handle: FfiConverterOptionString.read(from: &buf)
+                handle: FfiConverterOptionString.read(from: &buf), 
+                discoverableByContact: FfiConverterBool.read(from: &buf), 
+                discoverableByHandle: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -1701,6 +1721,8 @@ public struct FfiConverterTypeIdentityStatusInfo: FfiConverterRustBuffer {
         FfiConverterBool.write(value.email, into: &buf)
         FfiConverterBool.write(value.phone, into: &buf)
         FfiConverterOptionString.write(value.handle, into: &buf)
+        FfiConverterBool.write(value.discoverableByContact, into: &buf)
+        FfiConverterBool.write(value.discoverableByHandle, into: &buf)
     }
 }
 

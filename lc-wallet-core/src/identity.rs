@@ -45,6 +45,20 @@ pub struct IdentityStatus {
     pub phone: bool,
     #[serde(default)]
     pub handle: Option<String>,
+    /// What the directory will match this identity by — the server has
+    /// always reported it; defaulted for older servers that did not.
+    #[serde(default)]
+    pub discoverability: Discoverability,
+}
+
+/// Opt-in discovery switches: nothing about an identity is findable
+/// until its owner turns one of these on.
+#[derive(Debug, Default, Clone, Copy, Deserialize)]
+pub struct Discoverability {
+    #[serde(default)]
+    pub by_contact_hash: bool,
+    #[serde(default)]
+    pub by_handle: bool,
 }
 
 #[derive(Debug, Deserialize)]

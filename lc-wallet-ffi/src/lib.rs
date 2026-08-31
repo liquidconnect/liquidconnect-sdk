@@ -391,6 +391,9 @@ pub struct IdentityStatusInfo {
     pub email: bool,
     pub phone: bool,
     pub handle: Option<String>,
+    /// Opt-in discovery switches, as the directory holds them now.
+    pub discoverable_by_contact: bool,
+    pub discoverable_by_handle: bool,
 }
 
 #[derive(uniffi::Record)]
@@ -495,6 +498,8 @@ impl IdentityService {
             email: s.email,
             phone: s.phone,
             handle: s.handle,
+            discoverable_by_contact: s.discoverability.by_contact_hash,
+            discoverable_by_handle: s.discoverability.by_handle,
         })
     }
 
