@@ -96,6 +96,18 @@ impl VenueKey {
         self.keypair.x_only_public_key().0
     }
 
+    /// Sign a typed request by rebuilding its digest under this key and
+    /// signing that — the one path a host should use to sign a
+    /// [`TypedRequest`], so order/withdraw/login all commit the exact
+    /// fields the wallet verified and displayed (in particular a
+    /// withdrawal signs its named destination, not the raw key). Returns
+    /// `(digest, signature)`. Errors if the request names something this
+    /// build cannot honour (unknown product, malformed dest address).
+    pub fn sign_typed(&self, request: &TypedRequest) -> Result<([u8; 32], Signature), String> {
+        let digest = typed_request_digest(request, &self.public_key().serialize())?;
+        Ok((digest, self.sign_digest(digest)))
+    }
+
     /// BIP340 over a venue digest, deterministic (no aux randomness) so
     /// signatures are vector-testable. Private on purpose: every public
     /// signing path goes through the typed builders in this module, so
@@ -336,7 +348,7 @@ pub fn sign_withdraw(key: &VenueKey, amt: u64, root: &[u8; 32]) -> ([u8; 32], Si
 /// ```json
 /// {"kind":"rf/order/v1","product":"RF-BTC-USDT","side":"sell",
 ///  "price":"11500000000000","qty":"10000000","expiry":100,"nonce":"7"}
-/// {"kind":"rf/withdraw/v1","amt":"5000","root":"aaaa…(64)"}
+/// {"kind":"rf/withdraw/v1","amt":"5000","dest":"tlq1…(address)","root":"aaaa…(64)"}
 /// {"kind":"rf/login/v1","challenge":"c1"}
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -349,9 +361,17 @@ pub enum TypedRequest {
         expiry: u32,
         nonce: u64,
     },
-    /// A withdrawal paid to the account key's own P2TR (the only
-    /// destination the convenience digest commits to).
-    Withdraw { amt: u64, root: [u8; 32] },
+    /// A withdrawal paid to `dest` — the wallet's own receive address, so
+    /// the funds land where the app's descriptor wallet can see them
+    /// (the raw-key P2TR the old flow paid was invisible to it). The
+    /// digest commits `dest`'s script; the wallet shows the address it is
+    /// withdrawing to and refuses if it does not rebuild the digest.
+    Withdraw {
+        amt: u64,
+        /// Destination address string (an Elements/Liquid address).
+        dest: String,
+        root: [u8; 32],
+    },
     Login { challenge: String },
 }
 
@@ -406,6 +426,7 @@ fn parse_typed_fields(kind: &str, value: &serde_json::Value) -> Result<TypedRequ
                 .map_err(|_| "root is not 32 bytes of hex".to_owned())?;
             Ok(TypedRequest::Withdraw {
                 amt: u64_field("amt")?,
+                dest: str_field("dest")?.to_owned(),
                 root,
             })
         }
@@ -435,8 +456,12 @@ pub fn typed_request_digest(request: &TypedRequest, pk: &[u8; 32]) -> Result<[u8
             }
             Ok(order_digest(pk, *side, *price, *qty, *expiry, *nonce))
         }
-        TypedRequest::Withdraw { amt, root } => {
-            Ok(withdraw_digest(pk, *amt, &p2tr_spk_hash(pk), root))
+        TypedRequest::Withdraw { amt, dest, root } => {
+            let address = dest
+                .parse::<elements::Address>()
+                .map_err(|e| format!("withdraw dest is not a valid address: {e}"))?;
+            let dest_spk_hash = sha(address.script_pubkey().as_bytes());
+            Ok(withdraw_digest(pk, *amt, &dest_spk_hash, root))
         }
         TypedRequest::Login { challenge } => Ok(login_digest(pk, challenge)),
     }
@@ -501,16 +526,36 @@ mod tests {
             "04e78310fc229b8d973fcd61744511cbe9182c1b00bcd56eee5f6b7181efdf4d"
         );
 
+        // Withdraw now pays a named address; the digest commits that
+        // address's script, so verify against an inline rebuild (the
+        // dest varies, so a fixed constant would not generalise).
+        let dest_key = VenueKey::from_seed(&[9u8; 32], Network::LiquidTestnet).unwrap();
+        let dest = elements::Address::p2tr(
+            SECP256K1,
+            dest_key.public_key(),
+            None,
+            None,
+            &elements::address::AddressParams::LIQUID_TESTNET,
+        );
         let withdraw = parse_typed_description(&format!(
-            r#"{{"kind":"rf/withdraw/v1","amt":"5000","root":"{}"}}"#,
+            r#"{{"kind":"rf/withdraw/v1","amt":"5000","dest":"{dest}","root":"{}"}}"#,
             "aa".repeat(32)
         ))
         .expect("typed")
         .expect("well-formed");
-        assert_eq!(
-            hex(&typed_request_digest(&withdraw, &pk).unwrap()),
-            "14cf3b3d26843d9b2b64fb9bb4fd1e5774d626453c79b55d36c68ec1004c7b8a"
-        );
+        let expected =
+            withdraw_digest(&pk, 5000, &sha(dest.script_pubkey().as_bytes()), &[0xaa; 32]);
+        assert_eq!(typed_request_digest(&withdraw, &pk).unwrap(), expected);
+        // A malformed dest address is a refusal, not a silent raw-key fallback.
+        assert!(typed_request_digest(
+            &TypedRequest::Withdraw {
+                amt: 1,
+                dest: "not-an-address".to_owned(),
+                root: [0u8; 32]
+            },
+            &pk
+        )
+        .is_err());
 
         // Not typed: ordinary opaque descriptions pass through as None.
         assert!(parse_typed_description("Sell 0.001 BTC").is_none());
