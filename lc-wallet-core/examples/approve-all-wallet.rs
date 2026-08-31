@@ -38,11 +38,18 @@ async fn main() -> anyhow::Result<()> {
     println!("identity: {}", identity.public_key());
     println!("venue:    {}", hex::encode(venue_pk));
 
+    // Seed-derived, so it SURVIVES restarts: the connect server delivers
+    // sign requests only to clients whose install_id matches the
+    // session's, so a random-per-process id silently orphans the session
+    // after the first restart (requests time out; only the removal
+    // notifs arrive).
+    let mut install = [0u8; 16];
+    install.copy_from_slice(&seed[..16]);
     let (wallet, mut events) = WalletConnect::spawn(WalletConnectConfig {
         url,
         descriptor: descriptor(&seed),
         key: WalletKey::new(&seed, Network::LiquidTestnet),
-        install_id: wire::InstallId::random(),
+        install_id: wire::InstallId(install),
     });
 
     // Links to open (connect-login requests to claim) arrive as lines
@@ -76,9 +83,51 @@ async fn main() -> anyhow::Result<()> {
     while let Some(event) = events.recv().await {
         match event {
             WalletEvent::LoggedIn => println!("logged in"),
+            WalletEvent::Sessions(sessions) => {
+                // Bench hygiene: a session whose install_id is not ours
+                // (is_local false) is a leftover from a dead process — the
+                // server will never route its requests here, so it only
+                // misleads. Stop it; the live login stays.
+                for session in &sessions {
+                    if !session.is_local {
+                        println!("stopping stale session {}", session.session_id);
+                        wallet.stop_session(&session.session_id);
+                    }
+                }
+                println!("sessions: {sessions:?}");
+            }
             WalletEvent::LoginRequested(req) => {
                 println!("login from {}: accepting", req.domain);
                 wallet.accept_login(&req.request_id);
+            }
+            WalletEvent::SignRequested(req) => {
+                // The venue's deposit PSET spends the bench account's
+                // staging coin — a raw-key P2TR of the venue key, which
+                // sign_pset_keyspend_inputs satisfies. Anything else in
+                // the PSET this bench cannot sign and leaves untouched.
+                let mut pset = match lc_wallet_core::approval::decode_pset(&req.pset) {
+                    Ok(pset) => pset,
+                    Err(err) => {
+                        println!("unparseable PSET ({err}): rejecting");
+                        wallet.reject_sign(&req.request_id);
+                        continue;
+                    }
+                };
+                let genesis = venue::genesis_block_hash(Network::LiquidTestnet)
+                    .expect("testnet genesis known");
+                match venue_key.sign_pset_keyspend_inputs(&mut pset, genesis) {
+                    Ok(signed) => {
+                        use base64::Engine as _;
+                        let signed_b64 = base64::engine::general_purpose::STANDARD
+                            .encode(elements::encode::serialize(&pset));
+                        println!("sign request from {}: signed {signed} venue input(s)", req.domain);
+                        wallet.accept_sign(&req.request_id, &signed_b64);
+                    }
+                    Err(err) => {
+                        println!("venue PSET signing failed ({err}): rejecting");
+                        wallet.reject_sign(&req.request_id);
+                    }
+                }
             }
             WalletEvent::SignMessageRequested(req) => {
                 match req
