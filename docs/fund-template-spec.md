@@ -1,8 +1,18 @@
 # Liquid Connect "fund request" (fund-this-template) — design spec
 
-Status: SDK LAYER BUILT 2026-08-31 (Scott's go the same evening, after
-the live e2e test of the two-step deposit) — wire/core/transport/FFI +
-`approval::verify_fund_template`, 36 tests green. Successor to and
+Status: ALL FIVE LAYERS BUILT 2026-08-31, same evening as Scott's go.
+SDK wire/core/transport/FFI + `approval::verify_fund_template` (this
+repo `dc66fb3`, 36 tests); connect-server relay (`swaption_be`
+`rf-pay-request-deploy` `d9d2656`, deployed to the testnet rf-connect);
+wallet-server `/v1/connect/fund/{start,status}`
+(`agentic-wallet-server` `0f7cd42`, compose 0.13.0 — LIVE at the next
+sudo install, the one remaining gate); app funding engine
+(`rf-sideswap_rust` lc-sdk `49e125d` `fund_pset`/`try_fund_template`,
+`rf-sideswapclient` `ba86f43` deposit dialog); venue
+`deposit-template`/`deposit-finish` + `/api/deposit/template` +
+`fund-status` (`rolling-future` `232de37`, deployed —
+falls back to pay-request until the wallet server carries the fund
+relay). Successor to and
 generalisation of the staging-address deposit;
 `docs/pay-request-spec.md` is the direct predecessor and this follows
 its conventions. Private repos only until Pavel merges (repo rule).
