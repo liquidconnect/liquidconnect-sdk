@@ -42,6 +42,13 @@ pub enum WalletEvent {
     FundRequestRemoved { request_id: String },
 
     Sessions(Vec<wire::Session>),
+
+    /// The server refused an action this wallet sent (e.g. a link for an
+    /// unknown or expired login request) — render it, don't swallow it.
+    ActionFailed {
+        action: wire::UserAction,
+        message: String,
+    },
     SessionCreated(wire::Session),
     SessionRemoved { session_id: String },
 
@@ -220,6 +227,9 @@ fn apply_effects(
             Effect::SessionCreated { session } => WalletEvent::SessionCreated(session),
             Effect::SessionRemoved { session_id } => WalletEvent::SessionRemoved { session_id },
             Effect::MinimizeMobileApp => WalletEvent::MinimizeMobileApp,
+            Effect::ActionFailed { action, message } => {
+                WalletEvent::ActionFailed { action, message }
+            }
         };
         let _ = event_tx.send(event);
     }

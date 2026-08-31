@@ -120,6 +120,16 @@ pub enum Effect {
     /// A mobile-originated request finished; hand the person back to the
     /// browser that is waiting on this same device.
     MinimizeMobileApp,
+
+    /// A user action the wallet sent was refused by the server. The host
+    /// must be able to tell the person — a swallowed refusal left a
+    /// wrong-network deep link dying in silence (the server said
+    /// "unknown or expired login request" and the wallet rendered
+    /// nothing, 2026-08-31).
+    ActionFailed {
+        action: wire::UserAction,
+        message: String,
+    },
 }
 
 pub struct WalletConnectCore {
@@ -463,7 +473,12 @@ impl WalletConnectCore {
 
             wire::From::Error { id, err } => {
                 log::debug!("wallet-connect request failed: id={id}, err={err:?}");
-                self.user_actions.remove(&id);
+                if let Some(action) = self.user_actions.remove(&id) {
+                    effects.push(Effect::ActionFailed {
+                        action,
+                        message: err.message,
+                    });
+                }
             }
 
             wire::From::Notif { notif } => {
@@ -1121,5 +1136,37 @@ mod tests {
         assert!(!effects
             .iter()
             .any(|e| matches!(e, Effect::MinimizeMobileApp)));
+    }
+
+    /// A server refusal of a wallet-sent action surfaces as ActionFailed
+    /// — the host must be able to render it. A swallowed refusal left a
+    /// wrong-network deep link dying in silence.
+    #[test]
+    fn refused_action_surfaces_with_its_action() {
+        let mut core = core();
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+        // User actions number from 1 (0 = fire-and-forget challenge/login),
+        // so the link-login action rides req id 1.
+        let _ = core.handle(Input::AppLink {
+            app_link: crate::link::parse_app_link("liquidconnect://login/?request_id=nope")
+                .unwrap(),
+        });
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Error":{"id":1,"err":{"code":"InvalidRequest","message":"protocol error: unknown or expired login request — ask the site for a fresh link"}}}"#.to_owned(),
+            },
+        });
+        let failed = effects.iter().find_map(|e| match e {
+            Effect::ActionFailed { action, message } => Some((action, message)),
+            _ => None,
+        });
+        let (action, message) = failed.expect("refusal must surface");
+        assert!(matches!(
+            action,
+            wire::UserAction::LinkLoginRequest { request_id } if request_id == "nope"
+        ));
+        assert!(message.contains("unknown or expired login request"));
     }
 }
