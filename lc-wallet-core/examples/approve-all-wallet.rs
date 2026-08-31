@@ -162,15 +162,16 @@ async fn main() -> anyhow::Result<()> {
                         // (proven live: a venue bug once asked this bench
                         // to withdraw to another wallet's address, and it
                         // signed).
-                        if let venue::TypedRequest::Withdraw { dest, .. } = &typed
-                            && let Ok(expected) = std::env::var("LC_EXPECTED_WITHDRAW_DEST")
-                            && *dest != expected
-                        {
-                            println!(
-                                "withdraw dest {dest} is not the expected {expected}: rejecting"
-                            );
-                            wallet.reject_sign_message(&req.request_id);
-                            continue;
+                        if let venue::TypedRequest::Withdraw { dest, .. } = &typed {
+                            let expected = std::env::var("LC_EXPECTED_WITHDRAW_DEST").ok();
+                            if expected.as_deref().is_some_and(|e| e != dest) {
+                                println!(
+                                    "withdraw dest {dest} is not the expected {}: rejecting",
+                                    expected.unwrap_or_default()
+                                );
+                                wallet.reject_sign_message(&req.request_id);
+                                continue;
+                            }
                         }
                         let (_d, signature) = match venue_key.sign_typed(&typed) {
                             Ok(signed) => signed,
