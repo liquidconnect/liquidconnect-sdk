@@ -128,6 +128,33 @@ impl VenueKey {
         elements::Script::from(spk)
     }
 
+    /// The venue key's keypair tweaked per BIP341 (keyspend-only, the
+    /// TapTweak/elements tag) — the signer for coins at the STANDARD
+    /// taproot address of this key, which is where the venue stages
+    /// user deposits: a normal wallet must be able to pay and spend the
+    /// staging address, so it uses the standard form; the raw form
+    /// stays the covenant's internal exit/leaf model.
+    fn tweaked_keypair(&self) -> Keypair {
+        let tweak = elements::taproot::TapTweakHash::from_key_and_tweak(self.public_key(), None);
+        let tweak = elements::secp256k1_zkp::Scalar::from_be_bytes(tweak.to_byte_array())
+            .expect("a tagged hash is a valid scalar");
+        self.keypair
+            .add_xonly_tweak(SECP256K1, &tweak)
+            .expect("tap tweak cannot produce an invalid key")
+    }
+
+    /// The BIP341-tweaked P2TR script of the venue key — the standard
+    /// taproot output every wallet can pay, where the venue's deposit
+    /// staging coins sit. Contrast [`VenueKey::p2tr_script_pubkey`],
+    /// the raw covenant form.
+    pub fn p2tr_tweaked_script_pubkey(&self) -> elements::Script {
+        let (output_key, _) = self.tweaked_keypair().x_only_public_key();
+        let mut spk = Vec::with_capacity(34);
+        spk.extend_from_slice(&[0x51, 0x20]);
+        spk.extend_from_slice(&output_key.serialize());
+        elements::Script::from(spk)
+    }
+
     /// Sign input `index` of `tx` as a key-path spend of
     /// [`VenueKey::p2tr_script_pubkey`]. `prevouts` must carry every
     /// input's TxOut and `genesis` the chain's genesis hash — Elements
@@ -135,6 +162,18 @@ impl VenueKey {
     /// the host renders and verifies the transaction before asking.
     pub fn sign_p2tr_keyspend(
         &self,
+        tx: &elements::Transaction,
+        index: usize,
+        prevouts: &[elements::TxOut],
+        genesis: elements::BlockHash,
+    ) -> Signature {
+        // The output key is the raw account key (no tweak), so the raw
+        // keypair signs the sighash directly.
+        Self::sign_keyspend_with(&self.keypair, tx, index, prevouts, genesis)
+    }
+
+    fn sign_keyspend_with(
+        keypair: &Keypair,
         tx: &elements::Transaction,
         index: usize,
         prevouts: &[elements::TxOut],
@@ -149,12 +188,7 @@ impl VenueKey {
                 genesis,
             )
             .expect("prevouts must cover every input");
-        // The output key is the raw account key (no tweak), so the raw
-        // keypair signs the sighash directly.
-        SECP256K1.sign_schnorr_no_aux_rand(
-            &Message::from_digest(sighash.to_byte_array()),
-            &self.keypair,
-        )
+        SECP256K1.sign_schnorr_no_aux_rand(&Message::from_digest(sighash.to_byte_array()), keypair)
     }
 
     /// Satisfy every PSET input that is the raw-key P2TR of this venue
@@ -168,20 +202,27 @@ impl VenueKey {
         pset: &mut elements::pset::PartiallySignedTransaction,
         genesis: elements::BlockHash,
     ) -> anyhow::Result<usize> {
-        let spk = self.p2tr_script_pubkey();
-        let mine: Vec<usize> = pset
+        // This key's coins live under two scripts: the raw covenant form
+        // (exit payouts, pool leaves) and the standard tweaked form (the
+        // deposit staging address a normal wallet pays). Each input is
+        // signed with the keypair its script demands.
+        let raw_spk = self.p2tr_script_pubkey();
+        let tweaked_spk = self.p2tr_tweaked_script_pubkey();
+        let mine: Vec<(usize, bool)> = pset
             .inputs()
             .iter()
             .enumerate()
-            .filter(|(_, inp)| {
-                inp.final_script_witness.is_none()
-                    && inp
-                        .witness_utxo
-                        .as_ref()
-                        .map(|u| u.script_pubkey == spk)
-                        .unwrap_or(false)
+            .filter(|(_, inp)| inp.final_script_witness.is_none())
+            .filter_map(|(i, inp)| {
+                let spk = &inp.witness_utxo.as_ref()?.script_pubkey;
+                if *spk == raw_spk {
+                    Some((i, false))
+                } else if *spk == tweaked_spk {
+                    Some((i, true))
+                } else {
+                    None
+                }
             })
-            .map(|(i, _)| i)
             .collect();
         if mine.is_empty() {
             return Ok(0);
@@ -199,8 +240,10 @@ impl VenueKey {
             })
             .collect::<Result<_, _>>()?;
         let tx = pset.extract_tx()?;
-        for i in mine.iter().copied() {
-            let sig = self.sign_p2tr_keyspend(&tx, i, &prevouts, genesis);
+        let tweaked = self.tweaked_keypair();
+        for (i, needs_tweak) in mine.iter().copied() {
+            let keypair = if needs_tweak { &tweaked } else { &self.keypair };
+            let sig = Self::sign_keyspend_with(keypair, &tx, i, &prevouts, genesis);
             pset.inputs_mut()[i].final_script_witness = Some(vec![sig.as_ref().to_vec()]);
         }
         Ok(mine.len())
@@ -645,9 +688,17 @@ mod tests {
             script_pubkey: elements::Script::from(vec![0x51, 0x20, 0xAB]),
             ..mine.clone()
         };
+        // The standard tweaked form — the deposit staging address. Must
+        // differ from the raw script and be recognised alongside it.
+        let tweaked_spk = key.p2tr_tweaked_script_pubkey();
+        assert_ne!(tweaked_spk, spk, "tweak must move the output key");
+        let staged = elements::TxOut {
+            script_pubkey: tweaked_spk.clone(),
+            ..mine.clone()
+        };
 
         let mut pset = elements::pset::PartiallySignedTransaction::new_v2();
-        for (n, utxo) in [(0x11u8, &mine), (0x22u8, &foreign)] {
+        for (n, utxo) in [(0x11u8, &mine), (0x22u8, &foreign), (0x33u8, &staged)] {
             let mut inp = elements::pset::Input::from_prevout(elements::OutPoint {
                 txid: elements::Txid::from_slice(&[n; 32]).unwrap(),
                 vout: 0,
@@ -668,30 +719,37 @@ mod tests {
             None,
         ));
 
-        assert_eq!(key.sign_pset_keyspend_inputs(&mut pset, genesis).unwrap(), 1);
+        assert_eq!(key.sign_pset_keyspend_inputs(&mut pset, genesis).unwrap(), 2);
         assert!(pset.inputs()[0].final_script_witness.is_some());
         assert!(pset.inputs()[1].final_script_witness.is_none());
+        assert!(pset.inputs()[2].final_script_witness.is_some());
         assert_eq!(key.sign_pset_keyspend_inputs(&mut pset, genesis).unwrap(), 0);
 
-        let sig_bytes = &pset.inputs()[0].final_script_witness.as_ref().unwrap()[0];
-        let sig = Signature::from_slice(sig_bytes).unwrap();
         let tx = pset.extract_tx().unwrap();
-        let mut cache = elements::sighash::SighashCache::new(&tx);
-        let sighash = cache
-            .taproot_key_spend_signature_hash(
-                0,
-                &elements::sighash::Prevouts::All(&[mine.clone(), foreign.clone()]),
-                elements::sighash::SchnorrSighashType::Default,
-                genesis,
-            )
-            .unwrap();
-        SECP256K1
-            .verify_schnorr(
-                &sig,
-                &Message::from_digest(sighash.to_byte_array()),
-                &key.public_key(),
-            )
-            .unwrap();
+        let prevouts = [mine.clone(), foreign.clone(), staged.clone()];
+        let mut tweaked_output_key = [0u8; 32];
+        tweaked_output_key.copy_from_slice(&tweaked_spk.as_bytes()[2..]);
+        let tweaked_output_key = XOnlyPublicKey::from_slice(&tweaked_output_key).unwrap();
+        for (index, expect_key) in [(0usize, key.public_key()), (2, tweaked_output_key)] {
+            let sig_bytes = &pset.inputs()[index].final_script_witness.as_ref().unwrap()[0];
+            let sig = Signature::from_slice(sig_bytes).unwrap();
+            let mut cache = elements::sighash::SighashCache::new(&tx);
+            let sighash = cache
+                .taproot_key_spend_signature_hash(
+                    index,
+                    &elements::sighash::Prevouts::All(&prevouts),
+                    elements::sighash::SchnorrSighashType::Default,
+                    genesis,
+                )
+                .unwrap();
+            SECP256K1
+                .verify_schnorr(
+                    &sig,
+                    &Message::from_digest(sighash.to_byte_array()),
+                    &expect_key,
+                )
+                .unwrap();
+        }
     }
 
     /// Signatures verify against the venue key over the exact digest and
