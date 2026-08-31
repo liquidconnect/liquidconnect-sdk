@@ -45,24 +45,33 @@ async fn main() -> anyhow::Result<()> {
         install_id: wire::InstallId::random(),
     });
 
-    // Each stdin line is an app link to open (a login request to claim),
-    // so a driving script can hand the wallet the request id it got from
-    // the relay's login/start.
-    let link_wallet = wallet.clone();
-    tokio::spawn(async move {
-        use tokio::io::AsyncBufReadExt as _;
-        let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let line = line.trim().to_owned();
-            if line.is_empty() {
-                continue;
+    // Links to open (connect-login requests to claim) arrive as lines
+    // appended to the file named by LC_LINKS_FILE — a file, not stdin,
+    // because a detached container does not wire stdin reliably. Each
+    // new line is opened once; the file is created if missing.
+    if let Ok(path) = std::env::var("LC_LINKS_FILE") {
+        let link_wallet = wallet.clone();
+        std::thread::spawn(move || {
+            let mut seen = 0usize;
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    let lines: Vec<&str> = text.lines().collect();
+                    for line in lines.iter().skip(seen) {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        match link_wallet.open_link(line) {
+                            Ok(()) => println!("link opened: {line}"),
+                            Err(err) => println!("bad link {line}: {err}"),
+                        }
+                    }
+                    seen = lines.len();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
             }
-            match link_wallet.open_link(&line) {
-                Ok(()) => println!("link opened: {line}"),
-                Err(err) => println!("bad link {line}: {err}"),
-            }
-        }
-    });
+        });
+    }
 
     while let Some(event) = events.recv().await {
         match event {
