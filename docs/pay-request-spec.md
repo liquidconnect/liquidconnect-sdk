@@ -1,10 +1,22 @@
 # Liquid Connect "pay request" — design spec
 
-Status: SPEC, not built. Scott's direction 2026-08-31. This is the
-primitive that lets a relying party ask a connected wallet to pay an
-address, with the wallet building the transaction. It closes the
-"deposit from the app wallet" gap (paper.swaption.io) and generalises to
-any RP checkout/commerce flow.
+Status: BUILT 2026-08-31 (same day, Scott's green light; Pavel deferred
+until a public merge). All five layers: SDK wire/core/FFI (`c468a88`,
+e2e example `9da6d88`), swaption_be relay (`rf-pay-request-deploy`
+`72051ca`), agentic-wallet-server `/v1/connect/pay/{start,status}`
+(`632dff5`, compose 0.12.0), app send-flow + Pay dialog (sideswap_rust
+lc-sdk `c9b6382`, sideswapclient lc-sdk `fe2abfe`), venue deposit
+button (rolling-future `351db06`, venue session). Relay proven live
+against the staged connect_server binary. Goes live at the mcp2
+rf-connect deploy + the 0.12.0 install. The design below is as
+specified; the resolved choices: wallet-broadcasts (txid back), naming
+`StartPay`/`PayRequest`, `client_data` echoed on every status for
+deposit correlation/idempotency.
+
+This is the primitive that lets a relying party ask a connected wallet
+to pay an address, with the wallet building the transaction. It closes
+the "deposit from the app wallet" gap (paper.swaption.io) and
+generalises to any RP checkout/commerce flow.
 
 ## The problem it solves
 
