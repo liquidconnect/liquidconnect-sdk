@@ -86,6 +86,14 @@ pub struct VenueLoginLink {
     pub venue: String,
     /// The venue's one-time link code, passed through verbatim.
     pub link_code: String,
+    /// The network the venue trades on, when it says so (`network=liquid`
+    /// or `network=liquid-testnet`). A venue login is a DIRECT call from
+    /// wallet to venue — it never passes a connect server, so nothing
+    /// else in the protocol can catch a wallet on the wrong network. A
+    /// wallet that knows its own network must refuse a mismatch; older
+    /// venues that omit the parameter leave this None and the wallet
+    /// cannot check (see `docs/venue-login.md`).
+    pub network: Option<crate::key::Network>,
 }
 
 pub fn parse_venue_login_link(url: &str) -> Result<VenueLoginLink, anyhow::Error> {
@@ -123,7 +131,22 @@ pub fn parse_venue_login_link(url: &str) -> Result<VenueLoginLink, anyhow::Error
         .clone();
     ensure!(!link_code.is_empty(), "empty link code");
 
-    Ok(VenueLoginLink { venue, link_code })
+    // Optional and named, never positional: an unknown value is an error
+    // rather than a silent "no opinion", because the whole point is to
+    // stop a wallet acting on a venue it cannot settle with.
+    let network = match params.get("network").map(String::as_str) {
+        None => None,
+        Some("liquid") | Some("mainnet") => Some(crate::key::Network::Liquid),
+        Some("liquid-testnet") | Some("testnet") => Some(crate::key::Network::LiquidTestnet),
+        Some("liquid-regtest") | Some("regtest") => Some(crate::key::Network::Regtest),
+        Some(other) => bail!("unknown network in venue link: {other}"),
+    };
+
+    Ok(VenueLoginLink {
+        venue,
+        link_code,
+        network,
+    })
 }
 
 #[cfg(test)]
@@ -140,6 +163,20 @@ mod tests {
         .unwrap();
         assert_eq!(link.venue, "paper.swaption.io");
         assert_eq!(link.link_code, "abc123");
+        // A venue that says nothing leaves the wallet unable to check —
+        // it must not be read as "same network as me".
+        assert_eq!(link.network, None);
+
+        let testnet = parse_venue_login_link(
+            "liquidconnect://venue-login?venue=paper.swaption.io&link=abc&network=liquid-testnet",
+        )
+        .unwrap();
+        assert_eq!(testnet.network, Some(crate::key::Network::LiquidTestnet));
+        let mainnet = parse_venue_login_link(
+            "liquidconnect://venue-login?venue=t.swaption.io&link=abc&network=liquid",
+        )
+        .unwrap();
+        assert_eq!(mainnet.network, Some(crate::key::Network::Liquid));
 
         for bad in [
             "liquidconnect://venue-login?venue=paper.swaption.io",       // no code
@@ -150,6 +187,8 @@ mod tests {
             "liquidconnect://venue-login?venue=127.0.0.1&link=abc",      // ip
             "liquidconnect://venue-login?venue=localhost&link=abc",      // no dot
             "liquidconnect://login/?request_id=abc",                     // wrong kind
+            // an unreadable network claim is refused, never ignored
+            "liquidconnect://venue-login?venue=paper.swaption.io&link=abc&network=bitcoin",
         ] {
             assert!(parse_venue_login_link(bad).is_err(), "must refuse: {bad}");
         }
