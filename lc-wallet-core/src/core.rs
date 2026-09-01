@@ -30,7 +30,17 @@ pub enum Input {
 
     AppLink { app_link: AppLink },
 
-    LoginAccepted { request_id: String },
+    /// Approve a login. `service_binding` answers a request that carried
+    /// a `service_challenge`: the (key, signature) the HOST produced
+    /// with its service key over `venue::service_login_digest`. This
+    /// crate never holds that key — the same rule as SignMessageSigned.
+    /// A request that asked for a binding and is accepted without one is
+    /// refused rather than sent unbound, or the RP would be told the
+    /// login succeeded and left without the key it asked for.
+    LoginAccepted {
+        request_id: String,
+        service_binding: Option<ServiceBinding>,
+    },
 
     LoginRejected { request_id: String },
 
@@ -89,6 +99,14 @@ pub enum Input {
     RegisterFcmToken { token: String },
 
     StopSession { session_id: String },
+}
+
+/// A service key bound during login: the host's own key for this RP and
+/// its signature over `venue::service_login_digest`.
+#[derive(Debug, Clone)]
+pub struct ServiceBinding {
+    pub key: String,
+    pub signature: String,
 }
 
 #[must_use]
@@ -533,11 +551,35 @@ impl WalletConnectCore {
                 }
             },
 
-            Input::LoginAccepted { request_id } => {
+            Input::LoginAccepted {
+                request_id,
+                service_binding,
+            } => {
+                let wanted = self
+                    .login_requests
+                    .get(&request_id)
+                    .map(|request| request.service_challenge.is_some())
+                    .unwrap_or(false);
+                if wanted && service_binding.is_none() {
+                    effects.push(Effect::ActionFailed {
+                        action: wire::UserAction::CancelLoginRequest {
+                            request_id: request_id.clone(),
+                        },
+                        message: "this login needs a service key and none was supplied"
+                            .to_owned(),
+                    });
+                    return effects;
+                }
+                let (service_key, service_signature) = match service_binding {
+                    Some(ServiceBinding { key, signature }) => (Some(key), Some(signature)),
+                    None => (None, None),
+                };
                 self.add_user_action(
                     wire::UserAction::AcceptLoginRequest {
                         request_id: request_id.clone(),
                         descriptor: self.descriptor.clone(),
+                        service_key,
+                        service_signature,
                     },
                     &mut effects,
                 );
@@ -792,6 +834,7 @@ mod tests {
         let mut core = core();
         let effects = core.handle(Input::LoginAccepted {
             request_id: "r1".to_owned(),
+            service_binding: None,
         });
         assert!(sent_frames(&effects).is_empty(), "offline: nothing sent yet");
 
@@ -826,6 +869,7 @@ mod tests {
         }
         let accept = core.handle(Input::LoginAccepted {
             request_id: "r9".to_owned(),
+            service_binding: None,
         });
         assert!(sent_frames(&accept)[0].contains("dummy-descriptor"));
     }
@@ -1122,6 +1166,7 @@ mod tests {
         });
         let effects = core.handle(Input::LoginAccepted {
             request_id: "m1".to_owned(),
+            service_binding: None,
         });
         assert!(effects
             .iter()
@@ -1132,6 +1177,7 @@ mod tests {
         });
         let effects = core.handle(Input::LoginAccepted {
             request_id: "q1".to_owned(),
+            service_binding: None,
         });
         assert!(!effects
             .iter()

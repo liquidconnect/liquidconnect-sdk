@@ -417,6 +417,66 @@ pub fn login_digest(pk: &[u8; 32], challenge: &str) -> [u8; 32] {
     sha(&m)
 }
 
+/// The Liquid Connect service-login tag. Fixed by this crate and never
+/// supplied by the relying party: a wallet that signed an RP-chosen tag
+/// with its service key would be a signing oracle for that key's other
+/// uses (a venue's own withdraw and order claims are tagged strings over
+/// the same key).
+pub const SERVICE_LOGIN_TAG: &[u8] = b"lc/service-login/v1";
+
+/// The digest a wallet signs to bind its service key to an RP during
+/// login: `SHA256("lc/service-login/v1" || pk || domain || 0x00 ||
+/// challenge)`.
+///
+/// `domain` is the RP's domain **as the connect server knows it**, never
+/// as the RP claims it — that is what makes the result unforgeable and
+/// unreplayable at another RP, and what lets a wallet answer "which
+/// service am I binding to?" without trusting the asker. The NUL keeps
+/// domain and challenge from running together (`a.io` + `bc` must not
+/// collide with `a.iob` + `c`).
+pub fn service_login_digest(pk: &[u8; 32], domain: &str, challenge: &str) -> [u8; 32] {
+    let mut m =
+        Vec::with_capacity(SERVICE_LOGIN_TAG.len() + 32 + domain.len() + 1 + challenge.len());
+    m.extend_from_slice(SERVICE_LOGIN_TAG);
+    m.extend_from_slice(pk);
+    m.extend_from_slice(domain.as_bytes());
+    m.push(0);
+    m.extend_from_slice(challenge.as_bytes());
+    sha(&m)
+}
+
+/// Sign a service-login binding with the venue money key. Returns the
+/// x-only public key and the BIP340 signature, both hex — what the
+/// wallet hands back with its login acceptance.
+pub fn sign_service_login(key: &VenueKey, domain: &str, challenge: &str) -> (String, String) {
+    let pk = account_pk(key);
+    let digest = service_login_digest(&pk, domain, challenge);
+    (hex::encode(pk), key.sign_digest(digest).to_string())
+}
+
+/// Verify a service-login binding — the RP side, and the connect
+/// server's own check before it ever reports a key as bound.
+pub fn verify_service_login(
+    service_key: &str,
+    domain: &str,
+    challenge: &str,
+    signature: &str,
+) -> Result<[u8; 32], anyhow::Error> {
+    let mut pk = [0u8; 32];
+    hex::decode_to_slice(service_key, &mut pk)
+        .map_err(|_| anyhow::anyhow!("service key must be 32 bytes of hex"))?;
+    let digest = service_login_digest(&pk, domain, challenge);
+    let xonly = XOnlyPublicKey::from_slice(&pk)
+        .map_err(|_| anyhow::anyhow!("service key is not a valid x-only public key"))?;
+    let sig: Signature = signature
+        .parse()
+        .map_err(|_| anyhow::anyhow!("service signature is not valid hex"))?;
+    SECP256K1
+        .verify_schnorr(&sig, &Message::from_digest(digest), &xonly)
+        .map_err(|_| anyhow::anyhow!("service signature does not match the challenge"))?;
+    Ok(pk)
+}
+
 /// sha256 of the raw-x-only P2TR script `51 20 <pk>` — how the covenant
 /// commits to a payout destination. Withdrawals pay the venue money key
 /// itself.
@@ -861,5 +921,65 @@ mod tests {
         assert!(SECP256K1
             .verify_schnorr(&s, &Message::from_digest(other), &key.public_key())
             .is_err());
+    }
+
+    /// The digest is PINNED: the connect server verifies these bindings
+    /// with its own copy of this construction (it does not depend on this
+    /// crate), so a change here that is not mirrored there would silently
+    /// start refusing every login. The same vector is asserted in
+    /// `connect_server::domain`.
+    #[test]
+    fn service_login_vector_is_pinned() {
+        let pk = [0x11u8; 32];
+        assert_eq!(
+            hex::encode(service_login_digest(&pk, "paper.swaption.io", "chal-1")),
+            "227f138f3bcc0c36712c2f67a574a7eec3e0daa1ec34c82f6653acb33007c89e"
+        );
+    }
+
+    /// The service-login binding is bound to the RP's domain and to the
+    /// exact challenge: a signature made for one venue must not verify
+    /// at another, and the tag is ours, never the RP's.
+    #[test]
+    fn service_login_binds_domain_and_challenge() {
+        let key = VenueKey::from_seed(&[9u8; 64], Network::LiquidTestnet).unwrap();
+        let (pk, sig) = sign_service_login(&key, "paper.swaption.io", "chal-1");
+
+        assert!(verify_service_login(&pk, "paper.swaption.io", "chal-1", &sig).is_ok());
+        // replayed at another venue
+        assert!(verify_service_login(&pk, "evil.example", "chal-1", &sig).is_err());
+        // replayed with another challenge
+        assert!(verify_service_login(&pk, "paper.swaption.io", "chal-2", &sig).is_err());
+        // and a different key cannot claim the same binding
+        let other = VenueKey::from_seed(&[8u8; 64], Network::LiquidTestnet).unwrap();
+        let (other_pk, _) = sign_service_login(&other, "paper.swaption.io", "chal-1");
+        assert!(verify_service_login(&other_pk, "paper.swaption.io", "chal-1", &sig).is_err());
+    }
+
+    /// Domain and challenge cannot be slid into one another: without the
+    /// separator, ("a.io","bc") and ("a.iob","c") would sign the same
+    /// bytes and one venue's binding would verify at another.
+    #[test]
+    fn service_login_domain_and_challenge_cannot_collide() {
+        let key = VenueKey::from_seed(&[9u8; 64], Network::LiquidTestnet).unwrap();
+        let pk = key.public_key().serialize();
+        assert_ne!(
+            service_login_digest(&pk, "a.io", "bc"),
+            service_login_digest(&pk, "a.iob", "c")
+        );
+    }
+
+    /// The service-login digest is domain-separated from the venue's own
+    /// money claims: a login binding can never be replayed as a
+    /// withdrawal or an order under the same key.
+    #[test]
+    fn service_login_is_separated_from_money_claims() {
+        let key = VenueKey::from_seed(&[9u8; 64], Network::LiquidTestnet).unwrap();
+        let pk = key.public_key().serialize();
+        assert_ne!(
+            service_login_digest(&pk, "paper.swaption.io", "c"),
+            login_digest(&pk, "c")
+        );
+        assert!(SERVICE_LOGIN_TAG != LOGIN_TAG);
     }
 }

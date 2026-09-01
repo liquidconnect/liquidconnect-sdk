@@ -70,6 +70,16 @@ pub struct LoginRequest {
     pub request_id: String,
     pub domain: String,
     pub ttl: DurationMs,
+    /// The RP asks this login to ALSO prove control of the wallet's
+    /// service key for its domain — one request, one approval, instead
+    /// of a login followed by a separate signing round trip. Opaque
+    /// bytes chosen by the RP; the wallet signs a digest it builds
+    /// itself over a fixed tag, the domain the CONNECT SERVER knows for
+    /// this RP, and this challenge (`venue::service_login_digest`), so
+    /// the RP can never steer what gets signed and the result cannot be
+    /// replayed at another RP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_challenge: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +158,16 @@ pub enum UserAction {
     AcceptLoginRequest {
         request_id: String,
         descriptor: String,
+        /// The wallet's service key for this RP (x-only pubkey, hex) and
+        /// its BIP340 signature over `service_login_digest`. Present
+        /// only when the request carried a `service_challenge`. The
+        /// connect server verifies both before the session exists, so an
+        /// RP is told a key it can rely on rather than one it must
+        /// re-check.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        service_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        service_signature: Option<String>,
     },
 
     CancelLoginRequest {

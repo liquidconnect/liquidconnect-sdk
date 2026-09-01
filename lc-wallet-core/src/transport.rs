@@ -88,6 +88,26 @@ impl WalletConnect {
     pub fn accept_login(&self, request_id: &str) {
         self.send(Input::LoginAccepted {
             request_id: request_id.to_owned(),
+            service_binding: None,
+        });
+    }
+
+    /// Approve a login that asked for a service-key binding, supplying
+    /// the key and the signature this integration made over
+    /// `venue::service_login_digest` (see `WalletEvent::LoginRequested`'s
+    /// `service_challenge`).
+    pub fn accept_login_with_service_key(
+        &self,
+        request_id: &str,
+        key: &str,
+        signature: &str,
+    ) {
+        self.send(Input::LoginAccepted {
+            request_id: request_id.to_owned(),
+            service_binding: Some(crate::core::ServiceBinding {
+                key: key.to_owned(),
+                signature: signature.to_owned(),
+            }),
         });
     }
 
