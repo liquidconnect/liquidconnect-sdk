@@ -1,8 +1,23 @@
 # Liquid Connect "receive address" request — design spec
 
-Status: DESIGN, not started. Written 2026-09-01 on Scott's direction,
-after he hit the symptom: having logged in to paper.swaption.io, he
-still had to enable payment requests before he could withdraw.
+Status: ALL FIVE LAYERS BUILT 2026-09-01, the same evening it was
+specced — none deployed. SDK wire/core/transport/FFI (this repo
+`3de5678`); wallet-side wire types (`rf-sideswap_rust` lc-sdk `8307c73`)
+and the app's silent answer from `try_get_recv_address` (`87f930b`);
+connect-server relay with round-trip + malformed-answer tests
+(`swaption_be` rf-pay-request-deploy `2a48dc4`); wallet-server
+`/v1/connect/receive-address/{start,status}` (`agentic-wallet-server`
+`d908c4f`); venue `payout_dest` asking over LC per withdrawal, with the
+silent raw-key fallbacks on the SDK routes turned into refusals
+(`rolling-future` `ec348a4`, dry run re-run end to end). Deployment
+waits on the delegated-key cutover for the venue (main refuses the live
+state file by design) and on Scott's sudo install for the wallet
+server; the connect server must not be restarted under the live venue
+without the double-restart in the cutover runbook.
+
+Written 2026-09-01 on Scott's direction, after he hit the symptom:
+having logged in to paper.swaption.io, he still had to enable payment
+requests before he could withdraw.
 Successor in convention to `pay-request-spec.md` and
 `fund-template-spec.md`; this follows their layering. Private repos
 only until Pavel merges (repo rule).
