@@ -33,6 +33,10 @@ pub enum WalletEvent {
     SignRequestRemoved { request_id: String },
 
     SignMessageRequested(wire::SignMessageRequest),
+    ReceiveAddressRequested(wire::ReceiveAddressRequest),
+    ReceiveAddressRequestRemoved {
+        request_id: String,
+    },
     SignMessageRequestRemoved { request_id: String },
 
     PayRequested(wire::PayRequest),
@@ -162,6 +166,22 @@ impl WalletConnect {
     /// built, signed and broadcast itself. This SDK never builds the
     /// transaction — the host's send machinery does, renders the real
     /// recipient/amount/fee for the user, and hands back only the txid.
+    /// Answer a receive-address request. The address MUST be fresh and in
+    /// the session's network — this crate does not manage the address
+    /// chain and cannot check either (docs/receive-address-spec.md).
+    pub fn provide_receive_address(&self, request_id: &str, address: &str) {
+        self.send(Input::ReceiveAddressProvided {
+            request_id: request_id.to_owned(),
+            address: address.to_owned(),
+        });
+    }
+
+    pub fn reject_receive_address(&self, request_id: &str) {
+        self.send(Input::ReceiveAddressRejected {
+            request_id: request_id.to_owned(),
+        });
+    }
+
     pub fn accept_pay(&self, request_id: &str, txid: &str) {
         self.send(Input::PayBuilt {
             request_id: request_id.to_owned(),
@@ -231,6 +251,12 @@ fn apply_effects(
             }
             Effect::AddSignMessageRequest { request } => {
                 WalletEvent::SignMessageRequested(request)
+            }
+            Effect::AddReceiveAddressRequest { request } => {
+                WalletEvent::ReceiveAddressRequested(request)
+            }
+            Effect::RemoveReceiveAddressRequest { request_id } => {
+                WalletEvent::ReceiveAddressRequestRemoved { request_id }
             }
             Effect::RemoveSignMessageRequest { request_id } => {
                 WalletEvent::SignMessageRequestRemoved { request_id }

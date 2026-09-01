@@ -67,6 +67,22 @@ pub enum Input {
 
     SignMessageRejected { request_id: String },
 
+    /// Answer a receive-address request with an address the HOST derived
+    /// from its own wallet. This crate does not manage the address chain,
+    /// so the host supplies the address exactly as it supplies a txid for
+    /// a pay request; the request must still be live, or nothing is sent.
+    ///
+    /// The host is responsible for two things this crate cannot check:
+    /// the address must be FRESH (an unused one, so separate payouts are
+    /// not linked on chain) and it must be in the session's network.
+    /// See docs/receive-address-spec.md.
+    ReceiveAddressProvided {
+        request_id: String,
+        address: String,
+    },
+
+    ReceiveAddressRejected { request_id: String },
+
     /// Approve a pay request with the txid of the payment the HOST built,
     /// signed and broadcast from the wallet's own coins. This crate never
     /// builds transactions: the host's send machinery constructs the spend,
@@ -124,6 +140,8 @@ pub enum Effect {
 
     AddSignMessageRequest { request: wire::SignMessageRequest },
     RemoveSignMessageRequest { request_id: String },
+    AddReceiveAddressRequest { request: wire::ReceiveAddressRequest },
+    RemoveReceiveAddressRequest { request_id: String },
 
     AddPayRequest { request: wire::PayRequest },
     RemovePayRequest { request_id: String },
@@ -161,6 +179,7 @@ pub struct WalletConnectCore {
     login_requests: BTreeMap<String, wire::LoginRequest>,
     sign_requests: BTreeMap<String, wire::SignRequest>,
     sign_message_requests: BTreeMap<String, wire::SignMessageRequest>,
+    receive_address_requests: BTreeMap<String, wire::ReceiveAddressRequest>,
     pay_requests: BTreeMap<String, wire::PayRequest>,
     fund_requests: BTreeMap<String, wire::FundRequest>,
 
@@ -189,6 +208,7 @@ impl WalletConnectCore {
             login_requests: BTreeMap::new(),
             sign_requests: BTreeMap::new(),
             sign_message_requests: BTreeMap::new(),
+            receive_address_requests: BTreeMap::new(),
             pay_requests: BTreeMap::new(),
             fund_requests: BTreeMap::new(),
             user_actions: BTreeMap::new(),
@@ -317,6 +337,40 @@ impl WalletConnectCore {
         }
     }
 
+    fn sync_receive_address_requests(
+        &mut self,
+        receive_address_requests: Vec<wire::ReceiveAddressRequest>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let old_request_ids = self
+            .receive_address_requests
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let new_request_ids = receive_address_requests
+            .iter()
+            .map(|req| req.request_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        for req_id in old_request_ids.difference(&new_request_ids) {
+            self.receive_address_requests.remove(req_id);
+            effects.push(Effect::RemoveReceiveAddressRequest {
+                request_id: req_id.clone(),
+            });
+        }
+
+        for req in receive_address_requests {
+            if !self
+                .receive_address_requests
+                .contains_key(&req.request_id)
+            {
+                self.receive_address_requests
+                    .insert(req.request_id.clone(), req.clone());
+                effects.push(Effect::AddReceiveAddressRequest { request: req });
+            }
+        }
+    }
+
     fn sign_message_digest(&self, request_id: &str) -> Result<String, String> {
         let request = self
             .sign_message_requests
@@ -347,6 +401,7 @@ impl WalletConnectCore {
                 sign_message_requests,
                 pay_requests,
                 fund_requests,
+                receive_address_requests,
             }) => {
                 self.login_succeed = true;
 
@@ -364,6 +419,7 @@ impl WalletConnectCore {
                 self.sync_sign_message_requests(sign_message_requests, effects);
                 self.sync_pay_requests(pay_requests, effects);
                 self.sync_fund_requests(fund_requests, effects);
+                self.sync_receive_address_requests(receive_address_requests, effects);
                 effects.push(Effect::SessionList { sessions });
                 self.send_fcm_token(effects);
             }
@@ -433,6 +489,21 @@ impl WalletConnectCore {
             wire::Notif::SignMessageRequestRemoved(n) => {
                 self.sign_message_requests.remove(&n.request_id);
                 effects.push(Effect::RemoveSignMessageRequest {
+                    request_id: n.request_id,
+                });
+            }
+
+            wire::Notif::ReceiveAddressRequestCreated(notif) => {
+                self.receive_address_requests
+                    .insert(notif.request.request_id.clone(), notif.request.clone());
+                effects.push(Effect::AddReceiveAddressRequest {
+                    request: notif.request,
+                });
+            }
+
+            wire::Notif::ReceiveAddressRequestRemoved(n) => {
+                self.receive_address_requests.remove(&n.request_id);
+                effects.push(Effect::RemoveReceiveAddressRequest {
                     request_id: n.request_id,
                 });
             }
@@ -681,6 +752,34 @@ impl WalletConnectCore {
                 } else {
                     log::error!("pay request {request_id} is not live, dropping txid");
                 }
+                self.finish_request(request_id, &mut effects);
+            }
+
+            Input::ReceiveAddressProvided {
+                request_id,
+                address,
+            } => {
+                if self.receive_address_requests.contains_key(&request_id) {
+                    self.add_user_action(
+                        wire::UserAction::AcceptReceiveAddressRequest {
+                            request_id: request_id.clone(),
+                            address,
+                        },
+                        &mut effects,
+                    );
+                } else {
+                    log::error!("receive-address request {request_id} is not live, dropping address");
+                }
+                self.finish_request(request_id, &mut effects);
+            }
+
+            Input::ReceiveAddressRejected { request_id } => {
+                self.add_user_action(
+                    wire::UserAction::CancelReceiveAddressRequest {
+                        request_id: request_id.clone(),
+                    },
+                    &mut effects,
+                );
                 self.finish_request(request_id, &mut effects);
             }
 

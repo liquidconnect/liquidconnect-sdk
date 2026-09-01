@@ -105,6 +105,29 @@ pub struct SignMessageRequest {
     pub ttl: DurationMs,
 }
 
+/// A relying party's request for ONE address to pay this wallet at
+/// (docs/receive-address-spec.md).
+///
+/// It exists so an RP that must name a destination — a venue withdrawal
+/// commits the payout script in the digest the user approves — does not
+/// have to be handed a watch-only DESCRIPTOR to find one. The RP learns
+/// one address for one payout instead of the whole wallet forever.
+///
+/// The wallet answers with a FRESH unused address, so separate payouts
+/// are not linked on chain, and refuses when the session's network is not
+/// its own. There is no proof of ownership and none is needed: the wallet
+/// is the payee, so a lie costs only the liar, and the user approves the
+/// address where it is displayed (in the RP's own claim) regardless.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReceiveAddressRequest {
+    pub request_id: String,
+    pub domain: String,
+    /// What the RP wants it for ("Rolling Future withdrawal"). Shown if
+    /// the wallet shows anything; never parsed, never trusted.
+    pub description: Option<String>,
+    pub ttl: DurationMs,
+}
+
 /// A relying party's request that the wallet PAY: build a transaction to
 /// `recipient` for `amount` of `asset_id` from the wallet's own coins, show
 /// the real constructed send (recipient, amount, network fee) for approval,
@@ -189,6 +212,17 @@ pub enum UserAction {
         signature: String,
     },
 
+    /// Answer a [`ReceiveAddressRequest`] with one address in the
+    /// session's network. Carries no signature by design — see the type.
+    AcceptReceiveAddressRequest {
+        request_id: String,
+        address: String,
+    },
+
+    CancelReceiveAddressRequest {
+        request_id: String,
+    },
+
     CancelSignMessageRequest {
         request_id: String,
     },
@@ -251,6 +285,10 @@ pub struct LoginResp {
     /// with pre-pay connect servers.
     #[serde(default)]
     pub pay_requests: Vec<PayRequest>,
+    /// Pending receive-address requests. Defaulted for compatibility with
+    /// connect servers that predate them.
+    #[serde(default)]
+    pub receive_address_requests: Vec<ReceiveAddressRequest>,
     /// Pending fund requests for this wallet. Defaulted for compatibility
     /// with pre-fund connect servers.
     #[serde(default)]
@@ -312,6 +350,16 @@ pub struct SignMessageRequestCreatedNotif {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SignMessageRequestRemovedNotif {
+    pub request_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReceiveAddressRequestCreatedNotif {
+    pub request: ReceiveAddressRequest,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReceiveAddressRequestRemovedNotif {
     pub request_id: String,
 }
 
@@ -384,6 +432,8 @@ pub enum Notif {
     SignRequestRemoved(SignRequestRemovedNotif),
     SignMessageRequestCreated(SignMessageRequestCreatedNotif),
     SignMessageRequestRemoved(SignMessageRequestRemovedNotif),
+    ReceiveAddressRequestCreated(ReceiveAddressRequestCreatedNotif),
+    ReceiveAddressRequestRemoved(ReceiveAddressRequestRemovedNotif),
     PayRequestCreated(PayRequestCreatedNotif),
     PayRequestRemoved(PayRequestRemovedNotif),
     FundRequestCreated(FundRequestCreatedNotif),
@@ -435,6 +485,49 @@ mod tests {
             serde_json::to_string(&action).unwrap(),
             r#"{"Req":{"id":3,"req":{"UserAction":{"action":{"LinkLoginRequest":{"request_id":"r1"}}}}}}"#
         );
+
+        // Receive-address: the request carries NO digest and the answer
+        // carries NO signature — if either ever appears here, someone has
+        // confused this with sign-message (docs/receive-address-spec.md).
+        let addr_action = To::Req {
+            id: 7,
+            req: Req::UserAction(UserActionReq {
+                action: UserAction::AcceptReceiveAddressRequest {
+                    request_id: "ra1".to_owned(),
+                    address: "tlq1qexample".to_owned(),
+                },
+            }),
+        };
+        assert_eq!(
+            serde_json::to_string(&addr_action).unwrap(),
+            r#"{"Req":{"id":7,"req":{"UserAction":{"action":{"AcceptReceiveAddressRequest":{"request_id":"ra1","address":"tlq1qexample"}}}}}}"#
+        );
+
+        let addr_notif: From = serde_json::from_str(
+            r#"{"Notif":{"notif":{"ReceiveAddressRequestCreated":{"request":{"request_id":"ra1","domain":"paper.swaption.io","description":"Rolling Future withdrawal","ttl":60000}}}}}"#,
+        )
+        .unwrap();
+        match addr_notif {
+            From::Notif {
+                notif: Notif::ReceiveAddressRequestCreated(n),
+            } => {
+                assert_eq!(n.request.request_id, "ra1");
+                assert_eq!(n.request.domain, "paper.swaption.io");
+                assert_eq!(n.request.ttl.as_millis(), 60_000);
+            }
+            other => panic!("wrong parse: {other:?}"),
+        }
+
+        // A connect server that predates receive-address omits the field
+        // entirely; login must still parse.
+        let old_login: Resp = serde_json::from_str(
+            r#"{"Login":{"sessions":[],"sign_requests":[],"sign_message_requests":[],"pay_requests":[],"fund_requests":[]}}"#,
+        )
+        .unwrap();
+        match old_login {
+            Resp::Login(l) => assert!(l.receive_address_requests.is_empty()),
+            other => panic!("wrong parse: {other:?}"),
+        }
 
         let from: From = serde_json::from_str(
             r#"{"Notif":{"notif":{"SignRequestCreated":{"request":{"request_id":"s1","domain":"example.com","pset":"cHNldP8=","ttl":60000}}}}}"#,

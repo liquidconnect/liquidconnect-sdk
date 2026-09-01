@@ -126,6 +126,11 @@ pub enum WalletEvent {
     SignRequestRemoved { request_id: String },
     SignMessageRequested { request: SignMessageRequestInfo },
     SignMessageRequestRemoved { request_id: String },
+    /// An RP asked for ONE address to pay this wallet at. The host
+    /// answers with a FRESH unused address in the session's network, or
+    /// rejects — see docs/receive-address-spec.md.
+    ReceiveAddressRequested { request: ReceiveAddressRequestInfo },
+    ReceiveAddressRequestRemoved { request_id: String },
     PayRequested { request: PayRequestInfo },
     PayRequestRemoved { request_id: String },
     FundRequested { request: FundRequestInfo },
@@ -165,9 +170,23 @@ fn action_parts(action: wire::UserAction) -> (String, String) {
         A::CancelPayRequest { request_id } => ("cancel_pay_request", request_id),
         A::AcceptFundRequest { request_id, .. } => ("accept_fund_request", request_id),
         A::CancelFundRequest { request_id } => ("cancel_fund_request", request_id),
+        A::AcceptReceiveAddressRequest { request_id, .. } => {
+            ("accept_receive_address_request", request_id)
+        }
+        A::CancelReceiveAddressRequest { request_id } => {
+            ("cancel_receive_address_request", request_id)
+        }
         A::StopSession { session_id } => ("stop_session", session_id),
     };
     (label.to_owned(), id)
+}
+
+#[derive(uniffi::Record)]
+pub struct ReceiveAddressRequestInfo {
+    pub request_id: String,
+    pub domain: String,
+    pub description: Option<String>,
+    pub ttl_ms: u64,
 }
 
 fn session_info(s: wire::Session) -> SessionInfo {
@@ -252,6 +271,19 @@ fn map_event(event: transport::WalletEvent) -> WalletEvent {
         },
         transport::WalletEvent::SessionRemoved { session_id } => {
             WalletEvent::SessionRemoved { session_id }
+        }
+        transport::WalletEvent::ReceiveAddressRequested(r) => {
+            WalletEvent::ReceiveAddressRequested {
+                request: ReceiveAddressRequestInfo {
+                    request_id: r.request_id,
+                    domain: r.domain,
+                    description: r.description,
+                    ttl_ms: r.ttl.as_millis(),
+                },
+            }
+        }
+        transport::WalletEvent::ReceiveAddressRequestRemoved { request_id } => {
+            WalletEvent::ReceiveAddressRequestRemoved { request_id }
         }
         transport::WalletEvent::ActionFailed { action, message } => {
             let (action, subject_id) = action_parts(action);
@@ -366,6 +398,18 @@ impl LiquidConnectWallet {
     /// Approve a pay request with the txid of the payment the host wallet
     /// built, signed and broadcast itself from its own coins. The SDK
     /// never builds the transaction.
+    /// Answer a receive-address request with an address from this
+    /// wallet. Give a FRESH unused one: reusing an address links every
+    /// payout the RP makes to you into one on-chain cluster, which is
+    /// most of what this request exists to avoid.
+    pub fn provide_receive_address(&self, request_id: String, address: String) {
+        self.handle.provide_receive_address(&request_id, &address);
+    }
+
+    pub fn reject_receive_address(&self, request_id: String) {
+        self.handle.reject_receive_address(&request_id);
+    }
+
     pub fn accept_pay(&self, request_id: String, txid: String) {
         self.handle.accept_pay(&request_id, &txid);
     }
