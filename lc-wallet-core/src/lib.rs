@@ -31,6 +31,7 @@ pub mod identity;
 pub mod key;
 pub mod link;
 pub mod payjoin;
+pub mod short_id;
 pub mod venue;
 #[cfg(feature = "transport")]
 pub mod transport;

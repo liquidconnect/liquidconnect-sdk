@@ -28,6 +28,11 @@ key plus a per-network salt: nothing new to back up, different identity
 per network. The x-only public key **is** the identity — for Connect
 logins and for the identity API alike, which is why a key-proved
 identity and a login-bound one land on the same server-side record.
+What a *person* shares is not the key but its **short wallet id**
+(`short_id` module, `WalletKey::short_id()`): 16 Crockford-base32
+characters of a tagged hash, `XXXX-XXXX-XXXX-XXXX` — derived, so any
+server holding the key resolves it by recomputing. Spec and shared test
+vectors: `docs/short-wallet-id-spec.md`.
 
 The mbk is **view-tier** material — wallets export it to watch-only
 servers and explorers so third parties can see without spending — so a

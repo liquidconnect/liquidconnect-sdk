@@ -115,6 +115,11 @@ impl WalletKey {
         self.keypair.x_only_public_key().0
     }
 
+    /// The shareable form of this identity — see [`crate::short_id`].
+    pub fn short_id(&self) -> String {
+        crate::short_id::short_wallet_id(&self.public_key())
+    }
+
     pub fn sign_challenge(&self, challenge: &str) -> secp256k1_zkp::schnorr::Signature {
         let message = get_sign_message_hash(challenge);
         SECP256K1.sign_schnorr(&message, &self.keypair)
