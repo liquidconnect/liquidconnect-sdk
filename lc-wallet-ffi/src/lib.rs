@@ -133,7 +133,41 @@ pub enum WalletEvent {
     Sessions { sessions: Vec<SessionInfo> },
     SessionCreated { session: SessionInfo },
     SessionRemoved { session_id: String },
+    /// The connect server REFUSED an action this wallet sent (an accept,
+    /// a cancel, a link login, a session stop). The host must render it:
+    /// a swallowed refusal is how a wrong-network deep link died in
+    /// silence. `action` is a stable kind label and `subject_id` the
+    /// request (or session) it concerned, so a host can tie the failure
+    /// back to the thing the user was looking at without parsing prose.
+    ActionFailed {
+        action: String,
+        subject_id: String,
+        message: String,
+    },
     MinimizeMobileApp,
+}
+
+/// A stable label + subject id for a refused action. Kept deliberately
+/// coarse: hosts branch on the label, and the message carries the detail.
+fn action_parts(action: wire::UserAction) -> (String, String) {
+    use wire::UserAction as A;
+    let (label, id) = match action {
+        A::LinkLoginRequest { request_id } => ("link_login_request", request_id),
+        A::AcceptLoginRequest { request_id, .. } => ("accept_login_request", request_id),
+        A::CancelLoginRequest { request_id } => ("cancel_login_request", request_id),
+        A::AcceptSignRequest { request_id, .. } => ("accept_sign_request", request_id),
+        A::CancelSignRequest { request_id } => ("cancel_sign_request", request_id),
+        A::AcceptSignMessageRequest { request_id, .. } => {
+            ("accept_sign_message_request", request_id)
+        }
+        A::CancelSignMessageRequest { request_id } => ("cancel_sign_message_request", request_id),
+        A::AcceptPayRequest { request_id, .. } => ("accept_pay_request", request_id),
+        A::CancelPayRequest { request_id } => ("cancel_pay_request", request_id),
+        A::AcceptFundRequest { request_id, .. } => ("accept_fund_request", request_id),
+        A::CancelFundRequest { request_id } => ("cancel_fund_request", request_id),
+        A::StopSession { session_id } => ("stop_session", session_id),
+    };
+    (label.to_owned(), id)
 }
 
 fn session_info(s: wire::Session) -> SessionInfo {
@@ -218,6 +252,14 @@ fn map_event(event: transport::WalletEvent) -> WalletEvent {
         },
         transport::WalletEvent::SessionRemoved { session_id } => {
             WalletEvent::SessionRemoved { session_id }
+        }
+        transport::WalletEvent::ActionFailed { action, message } => {
+            let (action, subject_id) = action_parts(action);
+            WalletEvent::ActionFailed {
+                action,
+                subject_id,
+                message,
+            }
         }
         transport::WalletEvent::MinimizeMobileApp => WalletEvent::MinimizeMobileApp,
     }
