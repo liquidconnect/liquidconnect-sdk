@@ -149,15 +149,23 @@ pub struct FundTemplateSummary {
     /// The template's deficit for the requested asset — equal to the
     /// stated amount by construction (a mismatch is a refusal).
     pub deficit: u64,
+    /// Rows that were confidential on the wire and whose amount and asset
+    /// this function verified through their blind proofs. Hosts may
+    /// render these as "amount verified by proof"; zero means the whole
+    /// template was explicit.
+    pub proven_rows: usize,
 }
 
 /// Verify a fund-request template against the RP's claim
 /// (spec: docs/fund-template-spec.md, "The wallet's safety rules").
 ///
 /// Enforced here, for every host wallet, before anything renders:
-/// 1. every template input carries an EXPLICIT witness_utxo and every
-///    template output is EXPLICIT — anything confidential in the
-///    template is unverifiable and refused;
+/// 1. every template input carries a witness_utxo and every row is
+///    EXPLICIT — or, if confidential, states its amount and asset and
+///    carries blind value/asset proofs that verify against the row's
+///    commitments (docs/fund-template-confidential-proofs.md); anything
+///    confidential without verifying proofs is refused. The fee output
+///    is always explicit;
 /// 2. the template's deficit for `asset_id` (outputs − inputs) equals
 ///    `amount` exactly — the stated amount is arithmetic, not advisory;
 /// 3. for every other asset the template covers itself (deficit ≤ 0),
@@ -173,6 +181,8 @@ pub fn verify_fund_template(
     asset_id: &str,
     amount: u64,
 ) -> anyhow::Result<FundTemplateSummary> {
+    use elements::confidential::{Asset, Value};
+    use elements::{BlindAssetProofs as _, BlindValueProofs as _};
     use std::collections::BTreeMap;
     use std::str::FromStr as _;
 
@@ -186,8 +196,14 @@ pub fn verify_fund_template(
         "template has no outputs"
     );
 
-    // (in, out) sums per asset, checked arithmetic throughout.
+    let secp = elements::secp256k1_zkp::SECP256K1;
+
+    // (in, out) sums per asset, checked arithmetic throughout. Every
+    // number that enters here is either explicit on the row or bound to
+    // the row's commitments by a proof this function verified — never
+    // the relying party's word (docs/fund-template-confidential-proofs.md).
     let mut sums: BTreeMap<elements::AssetId, (u64, u64)> = BTreeMap::new();
+    let mut proven_rows = 0usize;
 
     for (i, input) in pset.inputs().iter().enumerate() {
         let utxo = input
@@ -195,10 +211,27 @@ pub fn verify_fund_template(
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("template input {i} has no witness_utxo"))?;
         let (asset, value) = match (utxo.asset, utxo.value) {
-            (
-                elements::confidential::Asset::Explicit(asset),
-                elements::confidential::Value::Explicit(value),
-            ) => (asset, value),
+            (Asset::Explicit(asset), Value::Explicit(value)) => (asset, value),
+            (Asset::Confidential(asset_gen), Value::Confidential(value_commit)) => {
+                let (Some(asset), Some(value), Some(asset_proof), Some(value_proof)) = (
+                    input.asset,
+                    input.amount,
+                    input.blind_asset_proof.as_ref(),
+                    input.blind_value_proof.as_ref(),
+                ) else {
+                    anyhow::bail!("template input {i} is confidential — unverifiable, refused");
+                };
+                anyhow::ensure!(
+                    asset_proof.blind_asset_proof_verify(secp, asset, asset_gen),
+                    "template input {i}: asset proof does not verify against the commitment"
+                );
+                anyhow::ensure!(
+                    value_proof.blind_value_proof_verify(secp, value, asset_gen, value_commit),
+                    "template input {i}: value proof does not verify against the commitment"
+                );
+                proven_rows += 1;
+                (asset, value)
+            }
             _ => anyhow::bail!("template input {i} is confidential — unverifiable, refused"),
         };
         let entry = sums.entry(asset).or_default();
@@ -211,8 +244,37 @@ pub fn verify_fund_template(
     let mut fee = None;
     let mut fee_outputs = 0usize;
     for (i, output) in pset.outputs().iter().enumerate() {
-        let (asset, value) = match (output.asset, output.amount) {
-            (Some(asset), Some(value)) => (asset, value),
+        let (asset, value) = match (output.asset_comm, output.amount_comm) {
+            (None, None) => match (output.asset, output.amount) {
+                (Some(asset), Some(value)) => (asset, value),
+                _ => anyhow::bail!("template output {i} is confidential — unverifiable, refused"),
+            },
+            (Some(asset_gen), Some(value_commit)) => {
+                let (Some(asset), Some(value), Some(asset_proof), Some(value_proof)) = (
+                    output.asset,
+                    output.amount,
+                    output.blind_asset_proof.as_ref(),
+                    output.blind_value_proof.as_ref(),
+                ) else {
+                    anyhow::bail!("template output {i} is confidential — unverifiable, refused");
+                };
+                anyhow::ensure!(
+                    !output.script_pubkey.is_empty(),
+                    "template output {i}: the fee output must be explicit"
+                );
+                anyhow::ensure!(
+                    asset_proof.blind_asset_proof_verify(secp, asset, asset_gen),
+                    "template output {i}: asset proof does not verify against the commitment"
+                );
+                anyhow::ensure!(
+                    value_proof.blind_value_proof_verify(secp, value, asset_gen, value_commit),
+                    "template output {i}: value proof does not verify against the commitment"
+                );
+                proven_rows += 1;
+                (asset, value)
+            }
+            // one commitment without the other: not a state a blinder
+            // produces, and nothing a proof could bind — unverifiable.
             _ => anyhow::bail!("template output {i} is confidential — unverifiable, refused"),
         };
         if output.script_pubkey.is_empty() {
@@ -255,6 +317,7 @@ pub fn verify_fund_template(
         output_count: pset.outputs().len(),
         fee,
         deficit,
+        proven_rows,
     })
 }
 
@@ -469,5 +532,110 @@ mod tests {
         assert!(!summary.fully_explicit);
         assert!(summary.outputs[0].confidential);
         assert_eq!(summary.outputs[0].amount, None);
+    }
+
+    use elements::confidential::{AssetBlindingFactor, ValueBlindingFactor};
+    use elements::secp256k1_zkp::{Generator, PedersenCommitment, RangeProof, SurjectionProof, SECP256K1};
+    use elements::{BlindAssetProofs as _, BlindValueProofs as _};
+
+    /// A confidential row the way a relying party would ship it: fresh
+    /// blinding factors, real commitments, and the two proofs that bind
+    /// the explicit amount and asset to them.
+    fn proven_confidential(asset: &str, value: u64) -> (TxOut, RangeProof, SurjectionProof) {
+        let mut rng = rand::thread_rng();
+        let asset_id = AssetId::from_str(asset).unwrap();
+        let abf = AssetBlindingFactor::new(&mut rng);
+        let vbf = ValueBlindingFactor::new(&mut rng);
+        let asset_gen = Generator::new_blinded(SECP256K1, asset_id.into_tag(), abf.into_inner());
+        let value_commit = PedersenCommitment::new(SECP256K1, value, vbf.into_inner(), asset_gen);
+        let value_proof =
+            RangeProof::blind_value_proof(&mut rng, SECP256K1, value, value_commit, asset_gen, vbf).unwrap();
+        let asset_proof = SurjectionProof::blind_asset_proof(&mut rng, SECP256K1, asset_id, abf).unwrap();
+        let txout = TxOut {
+            asset: Asset::Confidential(asset_gen),
+            value: Value::Confidential(value_commit),
+            nonce: elements::confidential::Nonce::Null,
+            script_pubkey: Script::from(vec![0x51]),
+            witness: TxOutWitness::default(),
+        };
+        (txout, value_proof, asset_proof)
+    }
+
+    fn proven_input(asset: &str, value: u64, claimed: u64) -> pset::Input {
+        let (utxo, value_proof, asset_proof) = proven_confidential(asset, value);
+        let outpoint = elements::OutPoint::new(elements::Txid::from_str(&"22".repeat(32)).unwrap(), 1);
+        let mut input = pset::Input::from_prevout(outpoint);
+        input.witness_utxo = Some(utxo);
+        input.amount = Some(claimed);
+        input.asset = Some(AssetId::from_str(asset).unwrap());
+        input.blind_value_proof = Some(Box::new(value_proof));
+        input.blind_asset_proof = Some(Box::new(asset_proof));
+        input
+    }
+
+    fn proven_output(asset: &str, value: u64) -> pset::Output {
+        let (utxo, value_proof, asset_proof) = proven_confidential(asset, value);
+        let mut output = pset::Output::from_txout(utxo);
+        output.amount = Some(value);
+        output.asset = Some(AssetId::from_str(asset).unwrap());
+        output.blind_value_proof = Some(Box::new(value_proof));
+        output.blind_asset_proof = Some(Box::new(asset_proof));
+        output
+    }
+
+    /// Option B: the deposit template with the pool input and the pool
+    /// output confidential-with-proofs. Same arithmetic, two proven rows.
+    #[test]
+    fn fund_template_accepts_confidential_rows_with_verifying_proofs() {
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        tx.add_input(proven_input(POOL_ASSET, 500, 500));
+        tx.add_input(template_input(TESTNET_LBTC, 1_000));
+        tx.add_output(proven_output(POOL_ASSET, 750));
+        tx.add_output(pset::Output::from_txout(explicit_txout(
+            TESTNET_LBTC,
+            100,
+            Script::from(vec![0x00, 0x14].into_iter().chain([4u8; 20]).collect::<Vec<u8>>()),
+        )));
+        tx.add_output(pset::Output::from_txout(explicit_txout(TESTNET_LBTC, 900, Script::new())));
+
+        let summary = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 250).unwrap();
+        assert_eq!(summary.deficit, 250);
+        assert_eq!(summary.proven_rows, 2);
+        assert_eq!(summary.fee, 900);
+    }
+
+    /// A proof binds ONE amount: claiming a different explicit amount
+    /// beside a valid commitment is refused, as is a confidential row
+    /// with no proofs at all, and a "fee" that hides behind commitments.
+    #[test]
+    fn fund_template_refuses_wrong_or_missing_proofs() {
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        tx.add_input(proven_input(POOL_ASSET, 500, 600));
+        tx.add_input(template_input(TESTNET_LBTC, 1_000));
+        tx.add_output(pset::Output::from_txout(explicit_txout(POOL_ASSET, 750, Script::from(vec![0x51]))));
+        tx.add_output(pset::Output::from_txout(explicit_txout(TESTNET_LBTC, 900, Script::new())));
+        let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 150).unwrap_err();
+        assert!(err.to_string().contains("value proof does not verify"), "{err}");
+
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        let mut bare = proven_input(POOL_ASSET, 500, 500);
+        bare.blind_value_proof = None;
+        bare.blind_asset_proof = None;
+        tx.add_input(bare);
+        tx.add_input(template_input(TESTNET_LBTC, 1_000));
+        tx.add_output(pset::Output::from_txout(explicit_txout(POOL_ASSET, 750, Script::from(vec![0x51]))));
+        tx.add_output(pset::Output::from_txout(explicit_txout(TESTNET_LBTC, 900, Script::new())));
+        let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 250).unwrap_err();
+        assert!(err.to_string().contains("confidential — unverifiable"), "{err}");
+
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        tx.add_input(template_input(POOL_ASSET, 500));
+        tx.add_input(template_input(TESTNET_LBTC, 1_000));
+        tx.add_output(pset::Output::from_txout(explicit_txout(POOL_ASSET, 750, Script::from(vec![0x51]))));
+        let mut hidden_fee = proven_output(TESTNET_LBTC, 900);
+        hidden_fee.script_pubkey = Script::new();
+        tx.add_output(hidden_fee);
+        let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 250).unwrap_err();
+        assert!(err.to_string().contains("fee output must be explicit"), "{err}");
     }
 }

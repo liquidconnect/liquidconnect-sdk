@@ -1,6 +1,10 @@
 # Fund request, option B: confidential template rows with proofs — proposal
 
-Status: PROPOSAL, 2026-09-02 (overnight). Nothing built. Written for
+Status: PROPOSAL, 2026-09-02 (overnight). SDK verifier side BUILT the same
+night (`approval::verify_fund_template` accepts proven rows, `proven_rows`
+in the summary, 3 new tests, 49/49 green); the FFI record does not expose
+`proven_rows` yet (would regenerate the committed bindings). RP side and
+app rendering not started. Written for
 Scott's phase-3 decision in `rolling-future`/`rf-swaption_be`
 `docs/DELIVERY-PLAN.md` ("Phase 3 design fork"): moving Swaption's
 Bull/Bear coinjoin onto `StartFund` without giving up its privacy.
