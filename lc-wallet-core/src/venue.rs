@@ -46,6 +46,7 @@ use crate::key::Network;
 pub const ORDER_TAG: &[u8] = b"rf/order/v1";
 pub const WITHDRAW_TAG: &[u8] = b"rf/withdraw/v1";
 pub const LOGIN_TAG: &[u8] = b"rf/login/v1";
+pub const DELEGATE_TAG: &[u8] = b"rf/delegate/v1";
 pub const PRODUCT: &[u8] = b"RF-BTC-USDT";
 
 /// BIP43 purpose index of the venue money key's derivation path:
@@ -407,6 +408,29 @@ pub fn withdraw_digest(
     sha(&m)
 }
 
+/// The delegation digest:
+/// `SHA256("rf/delegate/v1" || owner || trade || domain_utf8)`.
+///
+/// What it authorises, exactly: the venue at `domain` may sign ORDERS for
+/// the account owned by `owner` using `trade`, for as long as the account
+/// exists. It does NOT authorise withdrawals — those need `owner`, and the
+/// covenant pins their destination to `owner`'s own script, so the worst a
+/// delegate can do is trade the account's venue cash badly. There is no
+/// expiry and no size cap in the claim, deliberately: the venue could only
+/// ever promise those, so stating them would imply a limit that does not
+/// exist (rolling-future docs/delegated-trading-key.md).
+///
+/// `domain` binds the grant to one venue — the same claim replayed at
+/// another RP hashes differently and cannot verify.
+pub fn delegate_digest(owner: &[u8; 32], trade: &[u8; 32], domain: &str) -> [u8; 32] {
+    let mut m = Vec::with_capacity(DELEGATE_TAG.len() + 64 + domain.len());
+    m.extend_from_slice(DELEGATE_TAG);
+    m.extend_from_slice(owner);
+    m.extend_from_slice(trade);
+    m.extend_from_slice(domain.as_bytes());
+    sha(&m)
+}
+
 /// The login digest: `SHA256("rf/login/v1" || pk || challenge_utf8)` over
 /// the venue's single-use challenge.
 pub fn login_digest(pk: &[u8; 32], challenge: &str) -> [u8; 32] {
@@ -538,6 +562,7 @@ pub fn sign_withdraw(key: &VenueKey, amt: u64, root: &[u8; 32]) -> ([u8; 32], Si
 ///  "price":"11500000000000","qty":"10000000","expiry":100,"nonce":"7"}
 /// {"kind":"rf/withdraw/v1","amt":"5000","dest":"tlq1…(address)","root":"aaaa…(64)"}
 /// {"kind":"rf/login/v1","challenge":"c1"}
+/// {"kind":"rf/delegate/v1","venue":"paper.swaption.io","owner":"…(64)","tradePk":"…(64)"}
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypedRequest {
@@ -561,6 +586,21 @@ pub enum TypedRequest {
         root: [u8; 32],
     },
     Login { challenge: String },
+    /// Authorise a venue-held TRADING key for this wallet's venue account
+    /// (rolling-future docs/delegated-trading-key.md). Approving lets the
+    /// venue place orders for the account without asking again;
+    /// withdrawals still need this wallet, and the covenant pins their
+    /// destination to this wallet's own key. The grant is long-lived and
+    /// unmetered by design — a UI that implies an expiry or a size cap
+    /// would be lying about what is being signed.
+    ///
+    /// `owner` is checked against the wallet's own venue key at rebuild
+    /// time: a claim naming someone else's account cannot be signed here.
+    Delegate {
+        venue: String,
+        owner: [u8; 32],
+        trade_pk: [u8; 32],
+    },
 }
 
 /// Recognise a typed venue description. `None`: not typed — treat the
@@ -621,6 +661,19 @@ fn parse_typed_fields(kind: &str, value: &serde_json::Value) -> Result<TypedRequ
         "rf/login/v1" => Ok(TypedRequest::Login {
             challenge: str_field("challenge")?.to_owned(),
         }),
+        "rf/delegate/v1" => {
+            let mut owner = [0u8; 32];
+            hex::decode_to_slice(str_field("owner")?, &mut owner)
+                .map_err(|_| "owner is not 32 bytes of hex".to_owned())?;
+            let mut trade_pk = [0u8; 32];
+            hex::decode_to_slice(str_field("tradePk")?, &mut trade_pk)
+                .map_err(|_| "tradePk is not 32 bytes of hex".to_owned())?;
+            Ok(TypedRequest::Delegate {
+                venue: str_field("venue")?.to_owned(),
+                owner,
+                trade_pk,
+            })
+        }
         other => Err(format!("unknown typed request kind: {other}")),
     }
 }
@@ -652,6 +705,29 @@ pub fn typed_request_digest(request: &TypedRequest, pk: &[u8; 32]) -> Result<[u8
             Ok(withdraw_digest(pk, *amt, &dest_spk_hash, root))
         }
         TypedRequest::Login { challenge } => Ok(login_digest(pk, challenge)),
+        TypedRequest::Delegate {
+            venue,
+            owner,
+            trade_pk,
+        } => {
+            // The claim must be about THIS wallet's account. Rebuilding
+            // under `pk` regardless would let a venue get a signature over
+            // someone else's owner key — it would not verify there, but
+            // refusing here is the honest place to stop, and it keeps the
+            // dialog's "your account" claim true.
+            if owner != pk {
+                return Err(
+                    "delegation names another account's owner key — refusing".to_owned()
+                );
+            }
+            // A delegate equal to the owner is not a delegation: it would
+            // read as "authorise a venue key" while granting the venue
+            // nothing, or (worse) be mistaken for one that did.
+            if trade_pk == owner {
+                return Err("delegation trade key equals the owner key — refusing".to_owned());
+            }
+            Ok(delegate_digest(owner, trade_pk, venue))
+        }
     }
 }
 
@@ -686,6 +762,74 @@ mod tests {
             hex(&withdraw_digest(&pk, 5000, &dest, &[0xAA; 32])),
             "14cf3b3d26843d9b2b64fb9bb4fd1e5774d626453c79b55d36c68ec1004c7b8a"
         );
+        assert_eq!(
+            hex(&delegate_digest(&pk, &[4u8; 32], "paper.swaption.io")),
+            "ec146743b8a9923b84c6f4c90699e5df328398e73cb5e543ed826d70b5aaad35"
+        );
+    }
+
+    /// The delegation claim: the canonical JSON the venue emits parses,
+    /// rebuilds to the shared vector, and refuses the two cases that would
+    /// make the dialog lie — a claim about another account, and a
+    /// "delegation" to the owner key itself.
+    #[test]
+    fn delegate_claim_rebuilds_and_refuses() {
+        let pk = [3u8; 32];
+        let claim = format!(
+            r#"{{"kind":"rf/delegate/v1","venue":"paper.swaption.io","owner":"{}","tradePk":"{}"}}"#,
+            "03".repeat(32),
+            "04".repeat(32)
+        );
+        let parsed = parse_typed_description(&claim).expect("typed").expect("well-formed");
+        assert_eq!(
+            parsed,
+            TypedRequest::Delegate {
+                venue: "paper.swaption.io".to_owned(),
+                owner: [3u8; 32],
+                trade_pk: [4u8; 32],
+            }
+        );
+        assert_eq!(
+            hex(&typed_request_digest(&parsed, &pk).unwrap()),
+            "ec146743b8a9923b84c6f4c90699e5df328398e73cb5e543ed826d70b5aaad35"
+        );
+
+        // another account's owner key: refused, never rebuilt under ours
+        let other = TypedRequest::Delegate {
+            venue: "paper.swaption.io".to_owned(),
+            owner: [9u8; 32],
+            trade_pk: [4u8; 32],
+        };
+        assert!(typed_request_digest(&other, &pk).is_err());
+
+        // "delegate to yourself" is not a delegation
+        let self_deleg = TypedRequest::Delegate {
+            venue: "paper.swaption.io".to_owned(),
+            owner: [3u8; 32],
+            trade_pk: [3u8; 32],
+        };
+        assert!(typed_request_digest(&self_deleg, &pk).is_err());
+
+        // the domain binds the grant: another venue is a different digest
+        let elsewhere = TypedRequest::Delegate {
+            venue: "evil.example".to_owned(),
+            owner: [3u8; 32],
+            trade_pk: [4u8; 32],
+        };
+        assert_ne!(
+            typed_request_digest(&elsewhere, &pk).unwrap(),
+            typed_request_digest(&parsed, &pk).unwrap()
+        );
+
+        // malformed typed claims stay hard errors, never opaque fallbacks
+        assert!(parse_typed_description(r#"{"kind":"rf/delegate/v1"}"#)
+            .unwrap()
+            .is_err());
+        assert!(parse_typed_description(
+            r#"{"kind":"rf/delegate/v1","venue":"v","owner":"zz","tradePk":"04"}"#
+        )
+        .unwrap()
+        .is_err());
     }
 
     /// The typed-description contract: canonical JSON parses, rebuilds
