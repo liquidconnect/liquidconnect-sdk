@@ -154,6 +154,22 @@ pub struct FundTemplateSummary {
     /// render these as "amount verified by proof"; zero means the whole
     /// template was explicit.
     pub proven_rows: usize,
+    /// Template inputs the host declared as its own coins (rule 1a,
+    /// docs/lending-fund-spec.md): confidential on the wire, unblinded
+    /// from the host's records, and signed by the host. Hosts must list
+    /// them in the dialog beside the funded amount.
+    pub owned_inputs: usize,
+}
+
+/// A template input the host wallet recognises as one of its own coins,
+/// with the asset and amount the host unblinded from its own records.
+/// The host is responsible for the truth of these two numbers (it will
+/// sign the input); the verifier takes them as explicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnedInput {
+    pub index: usize,
+    pub asset: elements::AssetId,
+    pub amount: u64,
 }
 
 /// Verify a fund-request template against the RP's claim
@@ -181,6 +197,21 @@ pub fn verify_fund_template(
     asset_id: &str,
     amount: u64,
 ) -> anyhow::Result<FundTemplateSummary> {
+    verify_fund_template_owned(template_b64, asset_id, amount, &[])
+}
+
+/// [`verify_fund_template`] for templates that name inputs the host
+/// already owns (rule 1a, docs/lending-fund-spec.md): each `owned` row
+/// may be confidential on the wire and enters the arithmetic with the
+/// host's unblinded asset and amount. An explicit row declared as owned
+/// must agree with the declaration; an index outside the template or
+/// declared twice is a refusal.
+pub fn verify_fund_template_owned(
+    template_b64: &str,
+    asset_id: &str,
+    amount: u64,
+    owned: &[OwnedInput],
+) -> anyhow::Result<FundTemplateSummary> {
     use elements::confidential::{Asset, Value};
     use elements::{BlindAssetProofs as _, BlindValueProofs as _};
     use std::collections::BTreeMap;
@@ -205,14 +236,38 @@ pub fn verify_fund_template(
     let mut sums: BTreeMap<elements::AssetId, (u64, u64)> = BTreeMap::new();
     let mut proven_rows = 0usize;
 
+    for (n, o) in owned.iter().enumerate() {
+        anyhow::ensure!(
+            o.index < pset.inputs().len(),
+            "owned input {} is outside the template", o.index
+        );
+        anyhow::ensure!(
+            !owned[..n].iter().any(|p| p.index == o.index),
+            "owned input {} declared twice", o.index
+        );
+    }
+
     for (i, input) in pset.inputs().iter().enumerate() {
         let utxo = input
             .witness_utxo
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("template input {i} has no witness_utxo"))?;
-        let (asset, value) = match (utxo.asset, utxo.value) {
-            (Asset::Explicit(asset), Value::Explicit(value)) => (asset, value),
-            (Asset::Confidential(asset_gen), Value::Confidential(value_commit)) => {
+        let declared = owned.iter().find(|o| o.index == i);
+        let (asset, value) = match (utxo.asset, utxo.value, declared) {
+            // The host's own coin: its unblinded facts stand in for the
+            // row, explicit or not — the host signs it and its blinder
+            // enters the host's change.
+            (Asset::Explicit(asset), Value::Explicit(value), Some(o)) => {
+                anyhow::ensure!(
+                    asset == o.asset && value == o.amount,
+                    "owned input {i}: declaration disagrees with the explicit row"
+                );
+                (asset, value)
+            }
+            (Asset::Confidential(_), Value::Confidential(_), Some(o)) => (o.asset, o.amount),
+            (_, _, Some(_)) => anyhow::bail!("owned input {i}: half-blinded row"),
+            (Asset::Explicit(asset), Value::Explicit(value), None) => (asset, value),
+            (Asset::Confidential(asset_gen), Value::Confidential(value_commit), None) => {
                 let (Some(asset), Some(value), Some(asset_proof), Some(value_proof)) = (
                     input.asset,
                     input.amount,
@@ -318,6 +373,7 @@ pub fn verify_fund_template(
         fee,
         deficit,
         proven_rows,
+        owned_inputs: owned.len(),
     })
 }
 
@@ -637,5 +693,54 @@ mod tests {
         tx.add_output(hidden_fee);
         let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 250).unwrap_err();
         assert!(err.to_string().contains("fee output must be explicit"), "{err}");
+    }
+
+    /// Rule 1a: a confidential template input the host owns enters the
+    /// arithmetic with the host's unblinded facts and is signed by the
+    /// host. The exercise shape: NFT in (owned, confidential) at 0 and
+    /// back out at 0, position in at 1, position out at 1, lender payout
+    /// at 2, released collateral at 3 with the fee netted from it.
+    #[test]
+    fn fund_template_accepts_owned_confidential_inputs() {
+        const NFT: &str = "3333333333333333333333333333333333333333333333333333333333333333";
+        let nft = AssetId::from_str(NFT).unwrap();
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        let mut bare = proven_input(NFT, 1, 1);
+        bare.blind_value_proof = None;
+        bare.blind_asset_proof = None;
+        bare.amount = None;
+        bare.asset = None;
+        tx.add_input(bare);
+        tx.add_input(template_input(TESTNET_LBTC, 50_000));
+        tx.add_output(pset::Output::from_txout(explicit_txout(NFT, 1, Script::from(vec![0x51]))));
+        tx.add_output(pset::Output::from_txout(explicit_txout(TESTNET_LBTC, 25_000, Script::from(vec![0x52]))));
+        tx.add_output(pset::Output::from_txout(explicit_txout(POOL_ASSET, 1_000, Script::from(vec![0x53]))));
+        tx.add_output(pset::Output::from_txout(explicit_txout(TESTNET_LBTC, 24_900, Script::from(vec![0x51]))));
+        tx.add_output(pset::Output::from_txout(explicit_txout(TESTNET_LBTC, 100, Script::new())));
+        let b64 = pset_b64(&tx);
+
+        // Without the declaration the confidential row is a refusal.
+        let err = verify_fund_template(&b64, POOL_ASSET, 1_000).unwrap_err();
+        assert!(err.to_string().contains("confidential"), "{err}");
+
+        let owned = [OwnedInput { index: 0, asset: nft, amount: 1 }];
+        let summary = verify_fund_template_owned(&b64, POOL_ASSET, 1_000, &owned).unwrap();
+        assert_eq!(summary.deficit, 1_000);
+        assert_eq!(summary.owned_inputs, 1);
+        assert_eq!(summary.proven_rows, 0);
+
+        // A declaration must agree with an explicit row.
+        let wrong = [owned[0], OwnedInput { index: 1, asset: nft, amount: 50_000 }];
+        let err = verify_fund_template_owned(&b64, POOL_ASSET, 1_000, &wrong).unwrap_err();
+        assert!(err.to_string().contains("disagrees"), "{err}");
+        // Out of range, or twice.
+        let err = verify_fund_template_owned(&b64, POOL_ASSET, 1_000, &[OwnedInput { index: 9, asset: nft, amount: 1 }]).unwrap_err();
+        assert!(err.to_string().contains("outside"), "{err}");
+        let err = verify_fund_template_owned(&b64, POOL_ASSET, 1_000, &[owned[0], owned[0]]).unwrap_err();
+        assert!(err.to_string().contains("twice"), "{err}");
+        // The owned token still nets to zero: burning it instead of
+        // returning it is also balanced (1 in, 1 to OP_RETURN).
+        tx.outputs_mut()[0].script_pubkey = Script::from(vec![0x6a, 0x01, 0x00]);
+        assert!(verify_fund_template_owned(&pset_b64(&tx), POOL_ASSET, 1_000, &owned).is_ok());
     }
 }

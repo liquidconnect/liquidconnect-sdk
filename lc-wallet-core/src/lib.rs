@@ -15,6 +15,8 @@
 //!   with reconnect, keepalive, and an event stream to render.
 //! - [`approval`] — a sign request's PSET as structure to render,
 //!   honest about what is confidential.
+//! - [`lending`] — Swaption lending: typed `sw/lend/*` fund claims
+//!   checked against the template rows the wallet can read itself.
 //!
 //! What is deliberately absent: key custody and transaction signing.
 //! The wallet signs with its own machinery after its own verification;
@@ -29,6 +31,7 @@ pub mod approval;
 pub mod core;
 pub mod identity;
 pub mod key;
+pub mod lending;
 pub mod link;
 pub mod payjoin;
 pub mod short_id;
