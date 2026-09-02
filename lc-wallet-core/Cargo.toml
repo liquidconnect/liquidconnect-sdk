@@ -29,6 +29,16 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 default = ["transport"]
 transport = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures", "dep:rustls"]
 
+[dev-dependencies]
+# taker-bench-wallet: a real signing wallet for swap-market e2e runs.
+lwk_common = { version = "0.18.1" }
+lwk_signer = { version = "0.18.1", default-features = false }
+lwk_wollet = { version = "0.18.1", default-features = false, features = ["esplora"] }
+
+[[example]]
+name = "taker-bench-wallet"
+required-features = ["transport"]
+
 [[example]]
 name = "headless-wallet"
 required-features = ["transport"]
