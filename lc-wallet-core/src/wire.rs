@@ -128,6 +128,33 @@ pub struct ReceiveAddressRequest {
     pub ttl: DurationMs,
 }
 
+/// A relying party's request for this wallet's balance of ONE asset
+/// (docs/asset-balance-spec.md).
+///
+/// It exists so an RP that shows "what you could still send over" — the
+/// venue's "USDT in your wallet" row — does not need the wallet's
+/// watch-only descriptor to know it. The RP learns one number for one
+/// asset for the life of the session, instead of every address, balance
+/// and transaction forever.
+///
+/// The wallet answers from its own coins, with no dialog: the user
+/// consented to the session at login and the disclosure is bounded to the
+/// named asset. It may refuse; an RP treats refusal, timeout and an app
+/// too old to know the request alike — no number. There is no proof
+/// attached: the RP can act on the answer only by asking the wallet to
+/// pay, which the user then approves on the real transaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetBalanceRequest {
+    pub request_id: String,
+    pub domain: String,
+    /// What the RP wants it for ("Rolling Future — USDT you could
+    /// deposit"). Shown if the wallet shows anything; never parsed.
+    pub description: Option<String>,
+    /// The Liquid asset id, 64 hex chars. ONE asset per request.
+    pub asset_id: String,
+    pub ttl: DurationMs,
+}
+
 /// A relying party's request that the wallet PAY: build a transaction to
 /// `recipient` for `amount` of `asset_id` from the wallet's own coins, show
 /// the real constructed send (recipient, amount, network fee) for approval,
@@ -223,6 +250,17 @@ pub enum UserAction {
         request_id: String,
     },
 
+    /// Answer an [`AssetBalanceRequest`] with the wallet's confirmed
+    /// balance of that asset, in the asset's base units.
+    AcceptAssetBalanceRequest {
+        request_id: String,
+        amount: u64,
+    },
+
+    CancelAssetBalanceRequest {
+        request_id: String,
+    },
+
     CancelSignMessageRequest {
         request_id: String,
     },
@@ -289,6 +327,10 @@ pub struct LoginResp {
     /// connect servers that predate them.
     #[serde(default)]
     pub receive_address_requests: Vec<ReceiveAddressRequest>,
+    /// Pending asset-balance requests. Defaulted for compatibility with
+    /// connect servers that predate them.
+    #[serde(default)]
+    pub asset_balance_requests: Vec<AssetBalanceRequest>,
     /// Pending fund requests for this wallet. Defaulted for compatibility
     /// with pre-fund connect servers.
     #[serde(default)]
@@ -364,6 +406,16 @@ pub struct ReceiveAddressRequestRemovedNotif {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct AssetBalanceRequestCreatedNotif {
+    pub request: AssetBalanceRequest,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AssetBalanceRequestRemovedNotif {
+    pub request_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PayRequestCreatedNotif {
     pub request: PayRequest,
 }
@@ -434,6 +486,8 @@ pub enum Notif {
     SignMessageRequestRemoved(SignMessageRequestRemovedNotif),
     ReceiveAddressRequestCreated(ReceiveAddressRequestCreatedNotif),
     ReceiveAddressRequestRemoved(ReceiveAddressRequestRemovedNotif),
+    AssetBalanceRequestCreated(AssetBalanceRequestCreatedNotif),
+    AssetBalanceRequestRemoved(AssetBalanceRequestRemovedNotif),
     PayRequestCreated(PayRequestCreatedNotif),
     PayRequestRemoved(PayRequestRemovedNotif),
     FundRequestCreated(FundRequestCreatedNotif),
@@ -518,6 +572,39 @@ mod tests {
             other => panic!("wrong parse: {other:?}"),
         }
 
+        // Asset-balance: ONE asset in, ONE integer out, no signature and
+        // no proof — an RP acts on the number only by asking the wallet to
+        // pay, which the user approves on the real transaction
+        // (docs/asset-balance-spec.md).
+        let bal_action = To::Req {
+            id: 8,
+            req: Req::UserAction(UserActionReq {
+                action: UserAction::AcceptAssetBalanceRequest {
+                    request_id: "ab1".to_owned(),
+                    amount: 1_234_567_890,
+                },
+            }),
+        };
+        assert_eq!(
+            serde_json::to_string(&bal_action).unwrap(),
+            r#"{"Req":{"id":8,"req":{"UserAction":{"action":{"AcceptAssetBalanceRequest":{"request_id":"ab1","amount":1234567890}}}}}}"#
+        );
+
+        let bal_notif: From = serde_json::from_str(
+            r#"{"Notif":{"notif":{"AssetBalanceRequestCreated":{"request":{"request_id":"ab1","domain":"paper.swaption.io","description":"USDT you could deposit","asset_id":"b612eb46313a2cd6ebabd8b7a8eed5696e29898b87a43bff41c94f51acef9d73","ttl":15000}}}}}"#,
+        )
+        .unwrap();
+        match bal_notif {
+            From::Notif {
+                notif: Notif::AssetBalanceRequestCreated(n),
+            } => {
+                assert_eq!(n.request.request_id, "ab1");
+                assert_eq!(n.request.asset_id.len(), 64);
+                assert_eq!(n.request.ttl.as_millis(), 15_000);
+            }
+            other => panic!("wrong parse: {other:?}"),
+        }
+
         // A connect server that predates receive-address omits the field
         // entirely; login must still parse.
         let old_login: Resp = serde_json::from_str(
@@ -525,7 +612,10 @@ mod tests {
         )
         .unwrap();
         match old_login {
-            Resp::Login(l) => assert!(l.receive_address_requests.is_empty()),
+            Resp::Login(l) => {
+                assert!(l.receive_address_requests.is_empty());
+                assert!(l.asset_balance_requests.is_empty());
+            }
             other => panic!("wrong parse: {other:?}"),
         }
 

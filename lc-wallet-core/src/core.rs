@@ -83,6 +83,15 @@ pub enum Input {
 
     ReceiveAddressRejected { request_id: String },
 
+    /// Answer an asset-balance request with the amount the HOST summed
+    /// from its own coins, in the asset's base units. This crate holds no
+    /// coins, so the host supplies the number exactly as it supplies an
+    /// address; the request must still be live, or nothing is sent.
+    /// See docs/asset-balance-spec.md.
+    AssetBalanceProvided { request_id: String, amount: u64 },
+
+    AssetBalanceRejected { request_id: String },
+
     /// Approve a pay request with the txid of the payment the HOST built,
     /// signed and broadcast from the wallet's own coins. This crate never
     /// builds transactions: the host's send machinery constructs the spend,
@@ -142,6 +151,8 @@ pub enum Effect {
     RemoveSignMessageRequest { request_id: String },
     AddReceiveAddressRequest { request: wire::ReceiveAddressRequest },
     RemoveReceiveAddressRequest { request_id: String },
+    AddAssetBalanceRequest { request: wire::AssetBalanceRequest },
+    RemoveAssetBalanceRequest { request_id: String },
 
     AddPayRequest { request: wire::PayRequest },
     RemovePayRequest { request_id: String },
@@ -180,6 +191,7 @@ pub struct WalletConnectCore {
     sign_requests: BTreeMap<String, wire::SignRequest>,
     sign_message_requests: BTreeMap<String, wire::SignMessageRequest>,
     receive_address_requests: BTreeMap<String, wire::ReceiveAddressRequest>,
+    asset_balance_requests: BTreeMap<String, wire::AssetBalanceRequest>,
     pay_requests: BTreeMap<String, wire::PayRequest>,
     fund_requests: BTreeMap<String, wire::FundRequest>,
 
@@ -209,6 +221,7 @@ impl WalletConnectCore {
             sign_requests: BTreeMap::new(),
             sign_message_requests: BTreeMap::new(),
             receive_address_requests: BTreeMap::new(),
+            asset_balance_requests: BTreeMap::new(),
             pay_requests: BTreeMap::new(),
             fund_requests: BTreeMap::new(),
             user_actions: BTreeMap::new(),
@@ -371,6 +384,37 @@ impl WalletConnectCore {
         }
     }
 
+    fn sync_asset_balance_requests(
+        &mut self,
+        asset_balance_requests: Vec<wire::AssetBalanceRequest>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let old_request_ids = self
+            .asset_balance_requests
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let new_request_ids = asset_balance_requests
+            .iter()
+            .map(|req| req.request_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        for req_id in old_request_ids.difference(&new_request_ids) {
+            self.asset_balance_requests.remove(req_id);
+            effects.push(Effect::RemoveAssetBalanceRequest {
+                request_id: req_id.clone(),
+            });
+        }
+
+        for req in asset_balance_requests {
+            if !self.asset_balance_requests.contains_key(&req.request_id) {
+                self.asset_balance_requests
+                    .insert(req.request_id.clone(), req.clone());
+                effects.push(Effect::AddAssetBalanceRequest { request: req });
+            }
+        }
+    }
+
     fn sign_message_digest(&self, request_id: &str) -> Result<String, String> {
         let request = self
             .sign_message_requests
@@ -402,6 +446,7 @@ impl WalletConnectCore {
                 pay_requests,
                 fund_requests,
                 receive_address_requests,
+                asset_balance_requests,
             }) => {
                 self.login_succeed = true;
 
@@ -420,6 +465,7 @@ impl WalletConnectCore {
                 self.sync_pay_requests(pay_requests, effects);
                 self.sync_fund_requests(fund_requests, effects);
                 self.sync_receive_address_requests(receive_address_requests, effects);
+                self.sync_asset_balance_requests(asset_balance_requests, effects);
                 effects.push(Effect::SessionList { sessions });
                 self.send_fcm_token(effects);
             }
@@ -504,6 +550,21 @@ impl WalletConnectCore {
             wire::Notif::ReceiveAddressRequestRemoved(n) => {
                 self.receive_address_requests.remove(&n.request_id);
                 effects.push(Effect::RemoveReceiveAddressRequest {
+                    request_id: n.request_id,
+                });
+            }
+
+            wire::Notif::AssetBalanceRequestCreated(notif) => {
+                self.asset_balance_requests
+                    .insert(notif.request.request_id.clone(), notif.request.clone());
+                effects.push(Effect::AddAssetBalanceRequest {
+                    request: notif.request,
+                });
+            }
+
+            wire::Notif::AssetBalanceRequestRemoved(n) => {
+                self.asset_balance_requests.remove(&n.request_id);
+                effects.push(Effect::RemoveAssetBalanceRequest {
                     request_id: n.request_id,
                 });
             }
@@ -776,6 +837,31 @@ impl WalletConnectCore {
             Input::ReceiveAddressRejected { request_id } => {
                 self.add_user_action(
                     wire::UserAction::CancelReceiveAddressRequest {
+                        request_id: request_id.clone(),
+                    },
+                    &mut effects,
+                );
+                self.finish_request(request_id, &mut effects);
+            }
+
+            Input::AssetBalanceProvided { request_id, amount } => {
+                if self.asset_balance_requests.contains_key(&request_id) {
+                    self.add_user_action(
+                        wire::UserAction::AcceptAssetBalanceRequest {
+                            request_id: request_id.clone(),
+                            amount,
+                        },
+                        &mut effects,
+                    );
+                } else {
+                    log::error!("asset-balance request {request_id} is not live, dropping answer");
+                }
+                self.finish_request(request_id, &mut effects);
+            }
+
+            Input::AssetBalanceRejected { request_id } => {
+                self.add_user_action(
+                    wire::UserAction::CancelAssetBalanceRequest {
                         request_id: request_id.clone(),
                     },
                     &mut effects,

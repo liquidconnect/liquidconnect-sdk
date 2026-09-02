@@ -131,6 +131,11 @@ pub enum WalletEvent {
     /// rejects — see docs/receive-address-spec.md.
     ReceiveAddressRequested { request: ReceiveAddressRequestInfo },
     ReceiveAddressRequestRemoved { request_id: String },
+    /// An RP asked for this wallet's balance of ONE asset. The host
+    /// answers with the confirmed amount in base units, or rejects — see
+    /// docs/asset-balance-spec.md.
+    AssetBalanceRequested { request: AssetBalanceRequestInfo },
+    AssetBalanceRequestRemoved { request_id: String },
     PayRequested { request: PayRequestInfo },
     PayRequestRemoved { request_id: String },
     FundRequested { request: FundRequestInfo },
@@ -176,6 +181,12 @@ fn action_parts(action: wire::UserAction) -> (String, String) {
         A::CancelReceiveAddressRequest { request_id } => {
             ("cancel_receive_address_request", request_id)
         }
+        A::AcceptAssetBalanceRequest { request_id, .. } => {
+            ("accept_asset_balance_request", request_id)
+        }
+        A::CancelAssetBalanceRequest { request_id } => {
+            ("cancel_asset_balance_request", request_id)
+        }
         A::StopSession { session_id } => ("stop_session", session_id),
     };
     (label.to_owned(), id)
@@ -186,6 +197,16 @@ pub struct ReceiveAddressRequestInfo {
     pub request_id: String,
     pub domain: String,
     pub description: Option<String>,
+    pub ttl_ms: u64,
+}
+
+#[derive(uniffi::Record)]
+pub struct AssetBalanceRequestInfo {
+    pub request_id: String,
+    pub domain: String,
+    pub description: Option<String>,
+    /// Liquid asset id, 64 hex chars.
+    pub asset_id: String,
     pub ttl_ms: u64,
 }
 
@@ -284,6 +305,20 @@ fn map_event(event: transport::WalletEvent) -> WalletEvent {
         }
         transport::WalletEvent::ReceiveAddressRequestRemoved { request_id } => {
             WalletEvent::ReceiveAddressRequestRemoved { request_id }
+        }
+        transport::WalletEvent::AssetBalanceRequested(r) => {
+            WalletEvent::AssetBalanceRequested {
+                request: AssetBalanceRequestInfo {
+                    request_id: r.request_id,
+                    domain: r.domain,
+                    description: r.description,
+                    asset_id: r.asset_id,
+                    ttl_ms: r.ttl.as_millis(),
+                },
+            }
+        }
+        transport::WalletEvent::AssetBalanceRequestRemoved { request_id } => {
+            WalletEvent::AssetBalanceRequestRemoved { request_id }
         }
         transport::WalletEvent::ActionFailed { action, message } => {
             let (action, subject_id) = action_parts(action);
@@ -408,6 +443,17 @@ impl LiquidConnectWallet {
 
     pub fn reject_receive_address(&self, request_id: String) {
         self.handle.reject_receive_address(&request_id);
+    }
+
+    /// Answer an asset-balance request with this wallet's confirmed
+    /// balance of the named asset, in base units. Confirmed coins only:
+    /// the RP shows what could be sent over now, not what is in flight.
+    pub fn provide_asset_balance(&self, request_id: String, amount: u64) {
+        self.handle.provide_asset_balance(&request_id, amount);
+    }
+
+    pub fn reject_asset_balance(&self, request_id: String) {
+        self.handle.reject_asset_balance(&request_id);
     }
 
     pub fn accept_pay(&self, request_id: String, txid: String) {

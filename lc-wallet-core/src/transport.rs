@@ -37,6 +37,10 @@ pub enum WalletEvent {
     ReceiveAddressRequestRemoved {
         request_id: String,
     },
+    AssetBalanceRequested(wire::AssetBalanceRequest),
+    AssetBalanceRequestRemoved {
+        request_id: String,
+    },
     SignMessageRequestRemoved { request_id: String },
 
     PayRequested(wire::PayRequest),
@@ -182,6 +186,22 @@ impl WalletConnect {
         });
     }
 
+    /// Answer an asset-balance request with the wallet's confirmed
+    /// balance of the requested asset, in base units — summed by the host
+    /// from its own coins (docs/asset-balance-spec.md).
+    pub fn provide_asset_balance(&self, request_id: &str, amount: u64) {
+        self.send(Input::AssetBalanceProvided {
+            request_id: request_id.to_owned(),
+            amount,
+        });
+    }
+
+    pub fn reject_asset_balance(&self, request_id: &str) {
+        self.send(Input::AssetBalanceRejected {
+            request_id: request_id.to_owned(),
+        });
+    }
+
     pub fn accept_pay(&self, request_id: &str, txid: &str) {
         self.send(Input::PayBuilt {
             request_id: request_id.to_owned(),
@@ -257,6 +277,12 @@ fn apply_effects(
             }
             Effect::RemoveReceiveAddressRequest { request_id } => {
                 WalletEvent::ReceiveAddressRequestRemoved { request_id }
+            }
+            Effect::AddAssetBalanceRequest { request } => {
+                WalletEvent::AssetBalanceRequested(request)
+            }
+            Effect::RemoveAssetBalanceRequest { request_id } => {
+                WalletEvent::AssetBalanceRequestRemoved { request_id }
             }
             Effect::RemoveSignMessageRequest { request_id } => {
                 WalletEvent::SignMessageRequestRemoved { request_id }
