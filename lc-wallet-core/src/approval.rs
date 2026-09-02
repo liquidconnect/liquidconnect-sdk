@@ -213,6 +213,7 @@ pub fn verify_fund_template_owned(
     owned: &[OwnedInput],
 ) -> anyhow::Result<FundTemplateSummary> {
     use elements::confidential::{Asset, Value};
+    use elements::hashes::Hash as _;
     use elements::{BlindAssetProofs as _, BlindValueProofs as _};
     use std::collections::BTreeMap;
     use std::str::FromStr as _;
@@ -294,6 +295,42 @@ pub fn verify_fund_template_owned(
             .0
             .checked_add(value)
             .ok_or_else(|| anyhow::anyhow!("input sum overflow"))?;
+
+        // An EXPLICIT new issuance on this input creates `issuance_value_amount`
+        // of a brand-new asset whose id is a function of the prevout and the
+        // contract hash — count it as an input of that asset, or every
+        // template that mints a token (a lending position, a receipt) would
+        // read as an undeclared ask. Blinded issuances are unverifiable and
+        // refused; reissuances (a non-zero blinding nonce) are out of scope.
+        if let Some(issued) = input.issuance_value_amount {
+            anyhow::ensure!(
+                input.blinded_issuance.unwrap_or(0) == 0,
+                "template input {i}: blinded issuance — unverifiable, refused"
+            );
+            anyhow::ensure!(
+                input.issuance_inflation_keys.unwrap_or(0) == 0,
+                "template input {i}: issuance with reissuance tokens — refused"
+            );
+            let is_new_issuance = input
+                .issuance_blinding_nonce
+                .map(|n| n == elements::secp256k1_zkp::ZERO_TWEAK)
+                .unwrap_or(true);
+            anyhow::ensure!(is_new_issuance, "template input {i}: reissuance — refused");
+            let contract_hash = input
+                .issuance_asset_entropy
+                .ok_or_else(|| anyhow::anyhow!("template input {i}: issuance without entropy"))?;
+            let prevout = elements::OutPoint::new(input.previous_txid, input.previous_output_index);
+            let entropy = elements::AssetId::generate_asset_entropy(
+                prevout,
+                elements::ContractHash::from_byte_array(contract_hash),
+            );
+            let issued_asset = elements::AssetId::from_entropy(entropy);
+            let entry = sums.entry(issued_asset).or_default();
+            entry.0 = entry
+                .0
+                .checked_add(issued)
+                .ok_or_else(|| anyhow::anyhow!("input sum overflow"))?;
+        }
     }
 
     let mut fee = None;
@@ -742,5 +779,41 @@ mod tests {
         // returning it is also balanced (1 in, 1 to OP_RETURN).
         tx.outputs_mut()[0].script_pubkey = Script::from(vec![0x6a, 0x01, 0x00]);
         assert!(verify_fund_template_owned(&pset_b64(&tx), POOL_ASSET, 1_000, &owned).is_ok());
+    }
+
+    /// A template that MINTS tokens by issuance (a lending fill): the two
+    /// one-unit NFTs appear as outputs with no ordinary input behind them.
+    /// The explicit issuance on the input is what funds them.
+    #[test]
+    fn fund_template_credits_explicit_issuances() {
+        use elements::hashes::Hash as _;
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        let mut issuer = template_input(TESTNET_LBTC, 5_000);
+        let contract = [7u8; 32];
+        issuer.issuance_value_amount = Some(1);
+        issuer.issuance_inflation_keys = None;
+        issuer.issuance_blinding_nonce = Some(elements::secp256k1_zkp::ZERO_TWEAK);
+        issuer.issuance_asset_entropy = Some(contract);
+        issuer.blinded_issuance = Some(0);
+        let prevout = elements::OutPoint::new(issuer.previous_txid, issuer.previous_output_index);
+        let nft = AssetId::from_entropy(AssetId::generate_asset_entropy(prevout, elements::ContractHash::from_byte_array(contract)));
+        tx.add_input(issuer);
+        tx.add_output(pset::Output::from_txout(explicit_txout(POOL_ASSET, 1_000, Script::from(vec![0x51]))));
+        tx.add_output(pset::Output::from_txout(explicit_txout(&nft.to_string(), 1, Script::from(vec![0x52]))));
+        tx.add_output(pset::Output::from_txout(explicit_txout(TESTNET_LBTC, 4_500, Script::from(vec![0x53]))));
+        tx.add_output(pset::Output::from_txout(explicit_txout(TESTNET_LBTC, 500, Script::new())));
+        let summary = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 1_000).unwrap();
+        assert_eq!(summary.deficit, 1_000);
+
+        // Minting two where one was issued is an undeclared ask.
+        tx.outputs_mut()[1].amount = Some(2);
+        let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 1_000).unwrap_err();
+        assert!(err.to_string().contains("undeclared"), "{err}");
+
+        // A blinded issuance is unverifiable.
+        tx.outputs_mut()[1].amount = Some(1);
+        tx.inputs_mut()[0].blinded_issuance = Some(1);
+        let err = verify_fund_template(&pset_b64(&tx), POOL_ASSET, 1_000).unwrap_err();
+        assert!(err.to_string().contains("blinded issuance"), "{err}");
     }
 }
