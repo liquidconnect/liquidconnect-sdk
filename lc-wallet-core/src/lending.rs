@@ -13,8 +13,6 @@
 //! fund-template rules cap its outflow at `amount` plus the owned inputs
 //! it names — and the terms recorded in the fill's OP_RETURN metadata.
 
-use elements::pset;
-
 use crate::approval::{OwnedInput, decode_pset};
 
 /// One typed lending claim, parsed from `FundRequest.memo`.
@@ -330,6 +328,7 @@ pub fn fmt8(sats: u64) -> String {
 mod tests {
     use super::*;
     use elements::confidential::{Asset, Value};
+    use elements::pset;
     use elements::{AssetId, Script, TxOut, TxOutWitness};
     use std::str::FromStr;
 
