@@ -45,6 +45,11 @@ pub struct IdentityStatus {
     pub phone: bool,
     #[serde(default)]
     pub handle: Option<String>,
+    /// The short wallet id once the directory has bound it to this key
+    /// (first come). `None` until [`IdentityClient::claim_short_id`] has
+    /// succeeded — and the app shows no id before then.
+    #[serde(default)]
+    pub short_id: Option<String>,
     /// What the directory will match this identity by — the server has
     /// always reported it; defaulted for older servers that did not.
     #[serde(default)]
@@ -289,6 +294,20 @@ impl IdentityClient {
             .ok_or_else(|| anyhow::anyhow!("no handle in reply"))
     }
 
+    /// Bind this wallet's short id (`WalletKey::short_id`) to its
+    /// identity, first come. The directory recomputes the id from the
+    /// proved key and refuses a mismatch or an id another identity
+    /// already holds. Idempotent for the holder. Returns the bound id.
+    pub fn claim_short_id(&self, key: &WalletKey) -> anyhow::Result<String> {
+        let id = key.short_id();
+        let value = self.authed(key, "id", &id, serde_json::json!({ "id": id }))?;
+        value
+            .get("id")
+            .and_then(|h| h.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("no id in reply"))
+    }
+
     pub fn contacts_discover(
         &self,
         key: &WalletKey,
@@ -361,6 +380,7 @@ fn action_path(action: &str) -> &'static str {
         "phone_confirm" => "phone/confirm",
         "discoverability" => "discoverability",
         "handle" => "handle",
+        "id" => "id",
         "contacts_discover" => "contacts/discover",
         "contacts_save" => "contacts/save",
         "contacts_list" => "contacts/list",
@@ -388,6 +408,7 @@ mod tests {
             "phone_confirm",
             "discoverability",
             "handle",
+            "id",
             "contacts_discover",
             "contacts_save",
             "contacts_list",
