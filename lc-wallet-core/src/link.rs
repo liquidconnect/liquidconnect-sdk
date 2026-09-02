@@ -19,6 +19,16 @@ use anyhow::{anyhow, bail, ensure, Context as _};
 pub enum LinkType {
     Login,
     Sign,
+    /// `liquidconnect://request/?request_id=…` — bring the wallet to the
+    /// front for a request it already holds (a deposit, a withdrawal, a
+    /// trading authorisation the RP pushed over the session). Carries no
+    /// action: the request arrived over the socket and the app shows it
+    /// on its own. What the link adds is `mobile=true`, which makes the
+    /// core minimise the app back to the browser once the request is
+    /// answered — the same-device rule (a browser on this phone must not
+    /// need a notification tap to reach the wallet, and must get the
+    /// person back without a button).
+    Open,
 }
 
 #[derive(Debug)]
@@ -61,6 +71,7 @@ pub fn parse_app_link(url: &str) -> Result<AppLink, anyhow::Error> {
             LinkType::Login
         }
         ("https", "app.sideswap.io", "/sign/") | ("liquidconnect", "sign", "/") => LinkType::Sign,
+        ("liquidconnect", "request", "/") => LinkType::Open,
         _ => bail!("unsupported URL: {url}"),
     };
 
@@ -151,6 +162,17 @@ pub fn parse_venue_login_link(url: &str) -> Result<VenueLoginLink, anyhow::Error
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn request_link_opens_a_held_request_as_mobile() {
+        let l = super::parse_app_link("liquidconnect://request/?request_id=abc123&mobile=true").unwrap();
+        assert!(matches!(l.link_type, super::LinkType::Open));
+        assert_eq!(l.request_id, "abc123");
+        assert!(l.is_mobile);
+        // the https app-link form is deliberately NOT accepted for this:
+        // a desktop browser has no app to bring forward
+        assert!(super::parse_app_link("https://app.sideswap.io/request/?request_id=abc").is_err());
+    }
+
     use super::*;
 
     /// The venue-login form parses, and everything that could steer the

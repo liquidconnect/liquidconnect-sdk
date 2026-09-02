@@ -840,6 +840,10 @@ impl WalletConnectCore {
                 }
 
                 match link_type {
+                    // Nothing to send: the request is already in hand. The
+                    // is_mobile insert above is the whole effect — answer
+                    // it and the app hands back to the browser.
+                    LinkType::Open => {}
                     LinkType::Login => {
                         self.add_user_action(
                             wire::UserAction::LinkLoginRequest { request_id },
