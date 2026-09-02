@@ -275,6 +275,20 @@ impl IdentityClient {
         Ok(())
     }
 
+    /// Claim the public handle others pay this wallet by (`@scott`).
+    /// Signed over the handle as typed; the server lowercases and
+    /// validates (3–30 of a–z, 0–9 and _, letter first) and refuses a
+    /// taken one. Claiming opts into `by_handle` discoverability. Returns
+    /// the handle as stored.
+    pub fn claim_handle(&self, key: &WalletKey, handle: &str) -> anyhow::Result<String> {
+        let value = self.authed(key, "handle", handle, serde_json::json!({ "handle": handle }))?;
+        value
+            .get("handle")
+            .and_then(|h| h.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("no handle in reply"))
+    }
+
     pub fn contacts_discover(
         &self,
         key: &WalletKey,
@@ -346,6 +360,7 @@ fn action_path(action: &str) -> &'static str {
         "phone_sms" => "phone/sms",
         "phone_confirm" => "phone/confirm",
         "discoverability" => "discoverability",
+        "handle" => "handle",
         "contacts_discover" => "contacts/discover",
         "contacts_save" => "contacts/save",
         "contacts_list" => "contacts/list",
@@ -372,6 +387,7 @@ mod tests {
             "phone_sms",
             "phone_confirm",
             "discoverability",
+            "handle",
             "contacts_discover",
             "contacts_save",
             "contacts_list",

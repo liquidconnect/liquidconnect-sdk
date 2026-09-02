@@ -89,3 +89,22 @@ above). `lc-wallet-ffi` does not yet expose it to host apps.
 - FFI: a `LiquidConnectWallet.short_id()` export for SDK host apps.
 - The identity server could store `short_id` next to `identity_id` so
   `/v1/owner/contacts` can search by it — not needed for pay-by-id.
+
+## Handles: the thing people actually share (2026-09-02)
+
+Scott, after seeing the 16-character id: 8 characters would be nicer.
+A *derived* id cannot go that short (40 bits is forgeable in minutes on
+a GPU), so the shareable name is a **handle** — `@scott` — which the
+identity directory already modelled for its own wallet: 3–30 of
+`a-z 0-9 _`, letter first, case-insensitive, unique, opt-in public.
+What was missing was the phone-wallet path:
+
+| Layer | Added |
+|---|---|
+| wallet_server identity API | `POST /v1/identity/handle` (challenge-signed, action `handle`, value = the handle as typed), `App::claim_handle_for`; a rename releases the old name. Resolution for payers was already there: `GET /v1/owner/payment_address?handle=`. |
+| SDK | `IdentityClient::claim_handle`. |
+| App | `To.LcIdentityClaimHandle`; Settings › Liquid Connect ID has a "Pay handle" section; the activation dialog and Swaption "Get paid" show `@handle` first, the short id as fallback. |
+| Hub | Pay page accepts `@handle`, a handle, a short id, or a full key. A 16-character alphanumeric that could be either is tried as an id first, then as a handle. |
+
+The short id stays as the no-registry fallback: it works before a
+handle is claimed and in environments with no identity service.
