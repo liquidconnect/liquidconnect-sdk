@@ -70,10 +70,10 @@ lapse to the payout script) and additionally requires `payout` to be the
 claim script of the lender token found in output 2 (`lending::claim_script`),
 so the lender side is a transferable claim rather than a fixed address.
 
-`sw/lend/sellright/v1` `{price, cash}`: the wallet funds exactly one unit
-of its position token (owned input 0 is that token, so nothing more is
-added) and must find one of its own outputs paying at least `price` of
-`cash`. Rendered as "Sell your buyback right for … · the position closes
+`sw/lend/sellright/v1` `{price, cash, fee}`: owned input 0 is the wallet's
+position token; the wallet funds only the network `fee` in L-BTC (that
+funding input is what lets it blind the cash it receives) and must find one
+of its own outputs paying at least `price` of `cash`. Rendered as "Sell your buyback right for … · the position closes
 for you".
 
 A memo that parses as JSON with a `kind` starting `sw/` but fails to

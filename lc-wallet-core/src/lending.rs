@@ -56,11 +56,13 @@ pub enum TypedFund {
         payout: [u8; 32],
     },
     /// The borrower sells its buyback right (the position token, owned
-    /// input 0) to the dealer for `price` of `cash`. The position closes
-    /// for the borrower; nothing else leaves the wallet.
+    /// input 0) to the dealer for `price` of `cash`, funding only the
+    /// network `fee` in the policy asset. The position closes for the
+    /// borrower.
     SellRight {
         price: u64,
         cash: elements::AssetId,
+        fee: u64,
     },
     /// The borrower pays `amount` of `cash`; `released` of the policy
     /// asset comes back; `remaining` is the debt left (0 = full).
@@ -151,6 +153,7 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
         "sw/lend/sellright/v1" => Ok(TypedFund::SellRight {
             price: u64_field("price")?,
             cash: asset_field("cash")?,
+            fee: u64_field("fee")?,
         }),
         "sw/lend/exercise/v1" => Ok(TypedFund::Exercise {
             amount: u64_field("amount")?,
@@ -360,16 +363,17 @@ pub fn verify_typed_fund(
             })
         }
 
-        TypedFund::SellRight { price, cash } => {
+        TypedFund::SellRight { price, cash, fee } => {
             let token = owned
                 .iter()
                 .find(|o| o.index == 0)
                 .ok_or_else(|| anyhow::anyhow!("sell right: input 0 must be this wallet's position token"))?;
             anyhow::ensure!(token.amount == 1, "sell right: input 0 is not a one-unit token");
             anyhow::ensure!(
-                requested == token.asset && amount == 1,
-                "sell right: the funded amount must be exactly the position token"
+                requested == policy_asset && amount == *fee,
+                "sell right: the wallet funds only the network fee ({fee}), stated amount {amount}"
             );
+            anyhow::ensure!(*fee <= 5_000, "sell right: network fee {fee} is unreasonable");
             anyhow::ensure!(*price > 0, "sell right: price must be positive");
             let got = mine_paying(*cash)
                 .into_iter()
@@ -602,9 +606,10 @@ impl TypedFund {
                 expiry,
                 fmt8(*fee)
             ),
-            TypedFund::SellRight { price, .. } => format!(
-                "Sell your buyback right for {} {cash_symbol} · the position closes for you",
-                fmt8(*price)
+            TypedFund::SellRight { price, fee, .. } => format!(
+                "Sell your buyback right for {} {cash_symbol} · you pay the {} sat network fee · the position closes for you",
+                fmt8(*price),
+                fee
             ),
             TypedFund::Exercise {
                 amount,
