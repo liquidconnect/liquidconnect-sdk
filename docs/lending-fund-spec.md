@@ -62,6 +62,14 @@ taken from the borrower's cash. `exercise`: the borrower pays `amount`
 of `cash` and `released` L-BTC come back; `remaining` is the debt left
 after (0 = full).
 
+`sw/lend/fill/v2` adds `payout` (hex SHA-256 of the lender payout
+scriptPubKey); the wallet rebuilds the v2 position script from the terms
+and the pinned program leaf and refuses a template whose output 0 differs.
+`sw/lend/fill/v3` has the same fields for the v3 program (permissionless
+lapse to the payout script) and additionally requires `payout` to be the
+claim script of the lender token found in output 2 (`lending::claim_script`),
+so the lender side is a transferable claim rather than a fixed address.
+
 A memo that parses as JSON with a `kind` starting `sw/` but fails to
 parse or verify is a **refusal**, never a fallback to plain rendering
 (same rule as `rf/*`).
