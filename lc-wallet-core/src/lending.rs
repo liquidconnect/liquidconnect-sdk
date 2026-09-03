@@ -55,6 +55,22 @@ pub enum TypedFund {
         fee: u64,
         payout: [u8; 32],
     },
+    /// Like `FillV3`, for the v4 covenant: the venue may take a LAST LOOK
+    /// from `lastlook_height` — exercise a forgotten in-the-money right on
+    /// the borrower's behalf, paying the lender in full; what the venue
+    /// pays the borrower is policy. The wallet checks the borrower payout
+    /// in the terms is its own token output's script.
+    FillV4 {
+        size: u64,
+        sale: u64,
+        buyback: u64,
+        expiry: u32,
+        cash: elements::AssetId,
+        fee: u64,
+        payout: [u8; 32],
+        lastlook: [u8; 32],
+        lastlook_height: u32,
+    },
     /// The borrower sells its buyback right (the position token, owned
     /// input 0) to the dealer for `price` of `cash`, funding only the
     /// network `fee` in the policy asset. The position closes for the
@@ -148,6 +164,31 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
                 cash: asset_field("cash")?,
                 fee: u64_field("fee")?,
                 payout,
+            })
+        }
+        "sw/lend/fill/v4" => {
+            let mut payout = [0u8; 32];
+            hex::decode_to_slice(str_field("payout")?, &mut payout).map_err(|_| "payout is not 32 bytes of hex".to_owned())?;
+            let mut lastlook = [0u8; 32];
+            hex::decode_to_slice(str_field("lastlook")?, &mut lastlook).map_err(|_| "lastlook is not 32 bytes of hex".to_owned())?;
+            Ok(TypedFund::FillV4 {
+                size: u64_field("size")?,
+                sale: u64_field("sale")?,
+                buyback: u64_field("buyback")?,
+                expiry: value
+                    .get("expiry")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|v| u32::try_from(v).ok())
+                    .ok_or("missing or invalid field: expiry")?,
+                cash: asset_field("cash")?,
+                fee: u64_field("fee")?,
+                payout,
+                lastlook,
+                lastlook_height: value
+                    .get("lastlook_height")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|v| u32::try_from(v).ok())
+                    .ok_or("missing or invalid field: lastlook_height")?,
             })
         }
         "sw/lend/sellright/v1" => Ok(TypedFund::SellRight {
@@ -363,6 +404,70 @@ pub fn verify_typed_fund(
             })
         }
 
+        TypedFund::FillV4 {
+            size,
+            sale,
+            buyback,
+            expiry,
+            cash,
+            fee,
+            payout,
+            lastlook,
+            lastlook_height,
+        } => {
+            anyhow::ensure!(requested == policy_asset, "fill: the funded asset must be the collateral asset");
+            anyhow::ensure!(amount == *size, "fill: stated size {size} does not equal the funded amount {amount}");
+            anyhow::ensure!(*buyback > *sale, "fill: buyback must exceed the sale price");
+
+            let (asset, value) = explicit(FILL_POSITION_OUTPUT)?;
+            anyhow::ensure!(asset == policy_asset && value == *size, "fill: output 0 is not {size} of the collateral asset");
+            let (borrower_nft, nft) = explicit(FILL_BORROWER_NFT_OUTPUT)?;
+            anyhow::ensure!(nft == 1 && is_mine(FILL_BORROWER_NFT_OUTPUT), "fill: output 1 must pay this wallet its position token");
+            let (lender_nft, nft2) = explicit(FILL_LENDER_NFT_OUTPUT)?;
+            anyhow::ensure!(nft2 == 1, "fill: output 2 must be the lender's token");
+            // The lender is paid at the claim script of its token, so the
+            // lender side is a transferable claim, not a fixed address.
+            {
+                use elements::hashes::{Hash as _, sha256};
+                let claim = sha256::Hash::hash(claim_script(lender_nft).as_bytes()).to_byte_array();
+                anyhow::ensure!(claim == *payout, "fill: the lender payout is not the claim script of the lender token");
+            }
+
+            // THE covenant check: the position output must be the constant
+            // program with exactly these terms and the full debt.
+            // The borrower payout in the terms must be THIS wallet's script: the
+            // one its position token goes to (output 1).
+            let borrower_script = outputs
+                .get(FILL_BORROWER_NFT_OUTPUT)
+                .map(|o| o.script_pubkey.clone())
+                .ok_or_else(|| anyhow::anyhow!("template has no output 1"))?;
+            let borrower_hash = {
+                use elements::hashes::{Hash as _, sha256};
+                sha256::Hash::hash(borrower_script.as_bytes()).to_byte_array()
+            };
+            anyhow::ensure!(
+                *lastlook_height == 0 || *lastlook_height < *expiry,
+                "fill: the last-look height must be before expiry"
+            );
+            let digest = v4_terms_digest(policy_asset, *cash, *size, *buyback, *expiry, borrower_nft, lender_nft, payout, &borrower_hash, lastlook, *lastlook_height);
+            let expected = v4_position_script(&digest, *buyback);
+            let out0 = outputs.get(FILL_POSITION_OUTPUT).expect("checked above");
+            anyhow::ensure!(
+                out0.script_pubkey == expected,
+                "fill: output 0 is not the lending covenant for the stated terms"
+            );
+
+            let proceeds = sale
+                .checked_sub(*fee)
+                .ok_or_else(|| anyhow::anyhow!("fill: fee exceeds the sale price"))?;
+            anyhow::ensure!(mine_paying(*cash).contains(&proceeds), "fill: no output pays this wallet the sale proceeds ({proceeds})");
+
+            Ok(TypedFundCheck {
+                claim: claim.clone(),
+                receives: proceeds,
+            })
+        }
+
         TypedFund::SellRight { price, cash, fee } => {
             let token = owned
                 .iter()
@@ -444,6 +549,10 @@ pub const SWAPTION_LENDING_V2_LEAF: [u8; 32] = hex_literal::hex!("41d218d4f2b492
 /// v2 with a permissionless lapse that must pay the lender's payout script.
 pub const SWAPTION_LENDING_V3_LEAF: [u8; 32] = hex_literal::hex!("880d441e2d854331fd1d5c48afac9fd8b705c5c001f48587325820dc10ee73a8");
 
+/// Tapleaf hash of the constant v4 lending program (`swaption_lending_v4.simf`):
+/// v3 plus the venue's last look before expiry.
+pub const SWAPTION_LENDING_V4_LEAF: [u8; 32] = hex_literal::hex!("939c233fc8ebbd59cce2ec10ef7bbf681dd933fa6431e4d58dc013b728d9ef1a");
+
 /// Tapleaf hash of the constant claim program (`swaption_claim.simf`): a
 /// coin spendable by whoever spends one unit of the lender token as input 0.
 pub const SWAPTION_CLAIM_LEAF: [u8; 32] = hex_literal::hex!("51f916310d382610bf7efd7b345d9641b3dc93917d2afb77289add911f3403e1");
@@ -472,6 +581,43 @@ pub fn v2_terms_digest(
     m.extend_from_slice(&lender_nft.into_inner().0);
     m.extend_from_slice(payout_script_hash);
     sha256::Hash::hash(&m).to_byte_array()
+}
+
+/// The v4 terms digest: the v2/v3 preimage followed by the borrower
+/// payout script hash, the last-look script hash and the last-look height.
+#[allow(clippy::too_many_arguments)]
+pub fn v4_terms_digest(
+    collateral: elements::AssetId,
+    cash: elements::AssetId,
+    collateral_amount: u64,
+    buyback_amount: u64,
+    expiry_height: u32,
+    borrower_nft: elements::AssetId,
+    lender_nft: elements::AssetId,
+    payout_script_hash: &[u8; 32],
+    borrower_payout_script_hash: &[u8; 32],
+    last_look_script_hash: &[u8; 32],
+    last_look_height: u32,
+) -> [u8; 32] {
+    use elements::hashes::{Hash as _, sha256};
+    let mut m = Vec::with_capacity(32 * 7 + 24);
+    m.extend_from_slice(&collateral.into_inner().0);
+    m.extend_from_slice(&cash.into_inner().0);
+    m.extend_from_slice(&collateral_amount.to_be_bytes());
+    m.extend_from_slice(&buyback_amount.to_be_bytes());
+    m.extend_from_slice(&expiry_height.to_be_bytes());
+    m.extend_from_slice(&borrower_nft.into_inner().0);
+    m.extend_from_slice(&lender_nft.into_inner().0);
+    m.extend_from_slice(payout_script_hash);
+    m.extend_from_slice(borrower_payout_script_hash);
+    m.extend_from_slice(last_look_script_hash);
+    m.extend_from_slice(&last_look_height.to_be_bytes());
+    sha256::Hash::hash(&m).to_byte_array()
+}
+
+/// The v4 position scriptPubKey for a terms digest and a remaining debt.
+pub fn v4_position_script(digest: &[u8; 32], remaining_debt: u64) -> elements::Script {
+    position_script(SWAPTION_LENDING_V4_LEAF, digest, remaining_debt)
 }
 
 /// The v2 position scriptPubKey for a terms digest and a remaining debt.
@@ -606,6 +752,23 @@ impl TypedFund {
                 expiry,
                 fmt8(*fee)
             ),
+            TypedFund::FillV4 {
+                size,
+                sale,
+                buyback,
+                expiry,
+                fee,
+                lastlook_height,
+                ..
+            } => format!(
+                "Sell {} BTC for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol} · from block {} Swaption may exercise an unused in-the-money right for you and pay you the surplus less its fee",
+                fmt8(*size),
+                fmt8(*sale),
+                fmt8(*buyback),
+                expiry,
+                fmt8(*fee),
+                lastlook_height
+            ),
             TypedFund::SellRight { price, fee, .. } => format!(
                 "Sell your buyback right for {} {cash_symbol} · you pay the {} sat network fee · the position closes for you",
                 fmt8(*price),
@@ -633,7 +796,7 @@ impl TypedFund {
 
     pub fn cash(&self) -> elements::AssetId {
         match self {
-            TypedFund::Fill { cash, .. } | TypedFund::FillV2 { cash, .. } | TypedFund::FillV3 { cash, .. } | TypedFund::SellRight { cash, .. } | TypedFund::Exercise { cash, .. } => *cash,
+            TypedFund::Fill { cash, .. } | TypedFund::FillV2 { cash, .. } | TypedFund::FillV3 { cash, .. } | TypedFund::FillV4 { cash, .. } | TypedFund::SellRight { cash, .. } | TypedFund::Exercise { cash, .. } => *cash,
         }
     }
 }
@@ -891,5 +1054,16 @@ mod tests {
         assert_eq!(hex::encode(v3_position_script(&digest, 3_100_000_000_000).as_bytes()), "51202e0466fd296c985554b9b5b0a6076e0c51b24daa2ec4cd0463d2a47b4c8aadc8");
         assert_eq!(hex::encode(v3_position_script(&digest, 7).as_bytes()), "51202c181ce24fc01923dfdfd4366a3f38d5748e12dedab88caf12509f4746b6ec54");
         assert_eq!(hex::encode(claim_script(asset(4)).as_bytes()), "51200ec1e15d74191de822cca78f3d28fe219f18bc8992716191368a387ebdddf88d");
+    }
+
+    /// Pinned against `lending_contracts` (swaption_lending_v4 core tests,
+    /// `print_program_leaf`).
+    #[test]
+    fn v4_position_script_matches_the_contracts_crate() {
+        let asset = |b: u8| AssetId::from_slice(&[b; 32]).unwrap();
+        let digest = v4_terms_digest(asset(1), asset(2), 50_000_000, 3_100_000_000_000, 3_200_000, asset(3), asset(4), &[9u8; 32], &[10u8; 32], &[11u8; 32], 3_199_500);
+        assert_eq!(hex::encode(digest), "d9699f759118692dced610a96f6bf6ce2955da0c67263db3a00eaa39bc9d5d5f");
+        assert_eq!(hex::encode(v4_position_script(&digest, 3_100_000_000_000).as_bytes()), "5120c673923a74662e7076360c5b980185abc469518fbdf3d1af55ffe24439ccd276");
+        assert_eq!(hex::encode(v4_position_script(&digest, 7).as_bytes()), "5120cf07fbf5bd572d39f0089dc3d6b72bf72c3e9db5e54fdbb9df9e140402a28048");
     }
 }

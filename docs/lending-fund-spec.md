@@ -70,6 +70,11 @@ lapse to the payout script) and additionally requires `payout` to be the
 claim script of the lender token found in output 2 (`lending::claim_script`),
 so the lender side is a transferable claim rather than a fixed address.
 
+`sw/lend/fill/v4` adds `lastlook` (hex SHA-256 of the venue's last-look
+scriptPubKey) and `lastlook_height`; the wallet also requires the borrower
+payout hash in the terms to be the script of its own token output (output
+1), so the venue can only ever pay the borrower at the borrower's address.
+
 `sw/lend/sellright/v1` `{price, cash, fee}`: owned input 0 is the wallet's
 position token; the wallet funds only the network `fee` in L-BTC (that
 funding input is what lets it blind the cash it receives) and must find one
