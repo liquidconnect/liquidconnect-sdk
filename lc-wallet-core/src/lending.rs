@@ -55,6 +55,13 @@ pub enum TypedFund {
         fee: u64,
         payout: [u8; 32],
     },
+    /// The borrower sells its buyback right (the position token, owned
+    /// input 0) to the dealer for `price` of `cash`. The position closes
+    /// for the borrower; nothing else leaves the wallet.
+    SellRight {
+        price: u64,
+        cash: elements::AssetId,
+    },
     /// The borrower pays `amount` of `cash`; `released` of the policy
     /// asset comes back; `remaining` is the debt left (0 = full).
     Exercise {
@@ -141,6 +148,10 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
                 payout,
             })
         }
+        "sw/lend/sellright/v1" => Ok(TypedFund::SellRight {
+            price: u64_field("price")?,
+            cash: asset_field("cash")?,
+        }),
         "sw/lend/exercise/v1" => Ok(TypedFund::Exercise {
             amount: u64_field("amount")?,
             released: u64_field("released")?,
@@ -346,6 +357,28 @@ pub fn verify_typed_fund(
             Ok(TypedFundCheck {
                 claim: claim.clone(),
                 receives: proceeds,
+            })
+        }
+
+        TypedFund::SellRight { price, cash } => {
+            let token = owned
+                .iter()
+                .find(|o| o.index == 0)
+                .ok_or_else(|| anyhow::anyhow!("sell right: input 0 must be this wallet's position token"))?;
+            anyhow::ensure!(token.amount == 1, "sell right: input 0 is not a one-unit token");
+            anyhow::ensure!(
+                requested == token.asset && amount == 1,
+                "sell right: the funded amount must be exactly the position token"
+            );
+            anyhow::ensure!(*price > 0, "sell right: price must be positive");
+            let got = mine_paying(*cash)
+                .into_iter()
+                .filter(|v| *v >= *price)
+                .max()
+                .ok_or_else(|| anyhow::anyhow!("sell right: no output pays this wallet at least {price} of cash"))?;
+            Ok(TypedFundCheck {
+                claim: claim.clone(),
+                receives: got,
             })
         }
 
@@ -569,6 +602,10 @@ impl TypedFund {
                 expiry,
                 fmt8(*fee)
             ),
+            TypedFund::SellRight { price, .. } => format!(
+                "Sell your buyback right for {} {cash_symbol} · the position closes for you",
+                fmt8(*price)
+            ),
             TypedFund::Exercise {
                 amount,
                 released,
@@ -591,7 +628,7 @@ impl TypedFund {
 
     pub fn cash(&self) -> elements::AssetId {
         match self {
-            TypedFund::Fill { cash, .. } | TypedFund::FillV2 { cash, .. } | TypedFund::FillV3 { cash, .. } | TypedFund::Exercise { cash, .. } => *cash,
+            TypedFund::Fill { cash, .. } | TypedFund::FillV2 { cash, .. } | TypedFund::FillV3 { cash, .. } | TypedFund::SellRight { cash, .. } | TypedFund::Exercise { cash, .. } => *cash,
         }
     }
 }
