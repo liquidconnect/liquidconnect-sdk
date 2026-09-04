@@ -2,7 +2,7 @@
 
 The wallet-side SDK for [Liquid Connect](https://test.liquidconnect.io): everything a Liquid wallet needs to let its users connect to Liquid Connect applications — trading, payments, contract flows — while keys never leave the wallet.
 
-Status: v0.1 — wallet core, Kotlin/Swift bindings (uniffi), and the optional identity module (verified email free; phone reachability 0.5 USDT, payable over Liquid itself with payjoin so a USDt-only wallet is never stranded). Joining the project? Read  after this page.
+Status: v0.1 — wallet core, Kotlin/Swift bindings (uniffi), and the optional identity module (verified email free; phone reachability 0.5 USDT, payable over Liquid itself with payjoin so a USDt-only wallet is never stranded). Joining the project? Read [docs/ONBOARDING.md](docs/ONBOARDING.md) after this page.
 
 ## What integrating gets your users
 
