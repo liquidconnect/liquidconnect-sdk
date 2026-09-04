@@ -83,25 +83,3 @@ cases by hand. This is accepted for the length.
   point that uniqueness enforced at the directory is what actually
   closes the collision attack, the id went to 8 characters with
   first-come binding.
-
-## Rollout status — 2026-09-02 evening
-
-**Deployed and live**
-- Wallet server / directory `agentic-wallet-server:0.18.0` (agentic_wallet `769ccc6`) on the build host: `POST /v1/identity/id` and `/v1/identity/handle`, first-come binding, `GET /v1/owner/payment_address?id=|handle=`. Healthy, LC session up.
-- Hub `liquidconnect-web` `d73bcca` on test.liquidconnect.io: pay page resolves handles and 8-character ids through the directory. Verified live: unbound id → 404 "nobody is paid by that", unknown handle → 404, garbage and the old 16-character form → 400.
-- SDK master `34c6398` (+ this doc).
-
-**App (rf-sideswap_rust / rf-sideswapclient, private forks, never Pavel's mainlines)**
-- My commits: rust `5477e1d` (claim handle) → `25e6ffc` (id shown only once bound); dart `8a088c9` → `56bc6ad`. Made from worktrees `~/dev/sideswap_rust-lc8` / `~/dev/sideswapclient-lc8` (branch `lc8/short-id-binding`) because the shared checkouts held another session's uncommitted work.
-- That work (paid phone verification + mutual contacts, session scott-mcp-c2) is now committed and **merged with mine**: rf `lc-sdk` = rust `fdbca6f`, dart `fa47e5f` (lc-builds run 11 queued on that pair) ("Merge rf/lc-sdk (directory-bound short id) into the contacts/phone work"). The lc_identity.rs conflict (my removal of the `short_id` field vs. their new `Service` struct) was resolved by that session.
-- APK: lc-builds run 8 built `56bc6ad` (my UI without the contacts work); a new dispatch follows the merge. **Nothing has been proven from a phone yet** — claim-at-activation, "Registering…", handle claim, pay-by-handle/id end to end are all untested on device.
-
-**Merge into the defaults (Scott, 2026-09-02): agreed by every session.** Targets: rf-sideswap_rust `main` (at `612474f`), rf-sideswapclient `master` (at `3b35f15`); `lc-sdk` is the integration branch. Constraints raised: keep `9c25278` (lending fund templates — build 7, the APK Scott is testing lending with); the shared `~/dev/sideswap_rust` checkout is what rf-swaption_be's testnet branches build against via a Cargo `[patch]`, so it must keep carrying the connect_api wire types (sign-message, pay, fund, receive-address, service-key login). scott-mcp-c2 offered to do the merge after its push; scott-mcp2-a3 (on scott-mcp2, clean clone) will prep and show a diff if Scott asks it directly. **Not done yet** as of this note.
-
-**Build host:** 2 CPU; it wedged ~11:00Z under concurrent builds. One build at a time.
-
-**Known limits / follow-ups**
-- Resolving an id or handle needs the owner's wallet connected to the wallet server (address comes from the LC session snapshot).
-- `lc-wallet-ffi` does not expose `short_id` / claim to SDK host apps yet.
-- The hub's onboarding page does not offer handle claiming; that lives in the app.
-- Honest 40-bit collisions (two real wallets, same id): the second claimant gets the same 409 as an attacker and should use a handle; distinguish by the log line.
