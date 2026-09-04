@@ -5,7 +5,7 @@ SDK wire/core/transport/FFI + `approval::verify_fund_template` (this
 repo `dc66fb3`, 36 tests); connect-server relay (`swaption_be`
 `rf-pay-request-deploy` `d9d2656`, deployed to the testnet rf-connect);
 wallet-server `/v1/connect/fund/{start,status}`
-(`agentic-wallet-server` `0f7cd42`, compose 0.13.0 — LIVE at the next
+(`liquidconnect-server` `0f7cd42`, compose 0.13.0 — LIVE at the next
 sudo install, the one remaining gate); app funding engine
 (`rf-sideswap_rust` lc-sdk `49e125d` `fund_pset`/`try_fund_template`,
 `rf-sideswapclient` `ba86f43` deposit dialog); venue
@@ -139,14 +139,15 @@ needs recovery.
   stays host-side. (The SDK still builds nothing and holds no keys.)
 - `transport.rs` + FFI mirror of the pay surface.
 
-### 2. `swaption_be` `connect_server` + `rp_api`
+### 2. `liquidconnect-server` `connect/connect_server` + `connect/rp_api`
+(imported from `sideswap-io/swaption_be` `rf-pay-request-deploy`)
 - `StartFund` / `FundRequestStatus` / `CancelFundRequest`, relayed
   opaquely like `StartPay`; size cap sized for a realistic template
   (covenant deposit PSET is kilobytes — cap generously and test the
   largest real template against the cap; MAX_DESCRIPTION taught us).
 - Deploy branch off `rf-pay-request-deploy`, never main.
 
-### 3. `agentic-wallet-server`
+### 3. `liquidconnect-server`
 - `/v1/connect/fund/{start,status}` mirroring the pay relay: bearer-
   authed, non-spending, carries the template in and the funded PSET /
   txid out, `client_data` echoed on every status. Status vocabulary

@@ -1,7 +1,7 @@
 # Short wallet id and handles — what people share to get paid
 
 **Status: built 2026-09-02.** SDK (`lc-wallet-core/src/short_id.rs`,
-`identity.rs`), directory (`agentic_wallet` `identity_core/src/short_id.rs`,
+`identity.rs`), directory (`liquidconnect-server` `identity_core/src/short_id.rs`,
 wallet_server identity API), SideSwap app (`lc-sdk` branches), hub
 (`liquidconnect-web`). Wire protocol untouched: `wallet_id` on every
 message is still the full x-only key.
@@ -69,7 +69,7 @@ cases by hand. This is accepted for the length.
 
 | Layer | What |
 |---|---|
-| **Directory** (`agentic_wallet`) | `IdentityRecord.short_id`, `Directory::claim_short_id` (first come, idempotent for the holder), `request_payment_address_by_short_id`; identity API `POST /v1/identity/id` (challenge-signed, action `id`, value = the id as the wallet computed it; the server recomputes from the proved key and refuses a mismatch; 409 when bound elsewhere) and `POST /v1/identity/handle` (action `handle`); `status` reports `short_id` once bound; payers resolve either via `GET /v1/owner/payment_address?id=` or `?handle=`. |
+| **Directory** (`liquidconnect-server`) | `IdentityRecord.short_id`, `Directory::claim_short_id` (first come, idempotent for the holder), `request_payment_address_by_short_id`; identity API `POST /v1/identity/id` (challenge-signed, action `id`, value = the id as the wallet computed it; the server recomputes from the proved key and refuses a mismatch; 409 when bound elsewhere) and `POST /v1/identity/handle` (action `handle`); `status` reports `short_id` once bound; payers resolve either via `GET /v1/owner/payment_address?id=` or `?handle=`. |
 | **SDK** | `short_id` module, `WalletKey::short_id()`, `IdentityClient::claim_short_id` / `claim_handle`, `IdentityStatus.short_id`. |
 | **App** | Worker claims the id on every identity status refresh until bound and sends `LcIdentityState.short_id` only when the directory confirmed it (the locally derived id only when `available == false`). `To.LcIdentityClaimHandle` for handles. Settings › Liquid Connect ID shows the id (or "Registering…") and the Pay handle section; the activation dialog and the Swaption "Get paid" block show the handle first, else the bound id. |
 | **Hub** | Pay page accepts `@handle`, a bare handle, a short id, or a full key; short ids and handles resolve through the directory, a full key against connected wallets. A bare 8-character word that could be either is tried as an id first, then as a handle. |

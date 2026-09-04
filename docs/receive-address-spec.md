@@ -6,7 +6,7 @@ specced — none deployed. SDK wire/core/transport/FFI (this repo
 and the app's silent answer from `try_get_recv_address` (`87f930b`);
 connect-server relay with round-trip + malformed-answer tests
 (`swaption_be` rf-pay-request-deploy `2a48dc4`); wallet-server
-`/v1/connect/receive-address/{start,status}` (`agentic-wallet-server`
+`/v1/connect/receive-address/{start,status}` (`liquidconnect-server`
 `d908c4f`); venue `payout_dest` asking over LC per withdrawal, with the
 silent raw-key fallbacks on the SDK routes turned into refusals
 (`rolling-future` `ec348a4`, dry run re-run end to end). Deployment
@@ -165,10 +165,10 @@ dishonest one.
 
 1. **SDK** (`lc-wallet-core`): wire types, the two `UserAction`s, core
    handling and effect, FFI event. Mirrors sign-message throughout.
-2. **Connect server** (`swaption_be` `rp_api` + relay): the new
+2. **Connect server** (`liquidconnect-server` `connect/rp_api` + relay): the new
    `Req`/`Resp`/`Notif` variants and the relay path. Shape validation
    only — it never inspects the address.
-3. **Wallet server** (`agentic_wallet`): `/v1/connect/receive-address/
+3. **Wallet server** (`liquidconnect-server`): `/v1/connect/receive-address/
    {start,status}` for RPs on the relay path, exactly as sign-message.
 4. **App**: answer with the next unused address from the active wallet;
    network check; no dialog.

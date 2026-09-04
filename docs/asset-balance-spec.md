@@ -114,10 +114,10 @@ counted; they could not be deposited from that flow anyway.
 
 1. **SDK** (`lc-wallet-core`): wire types, the two `UserAction`s, core
    handling and effect, FFI event. Mirrors receive-address.
-2. **Connect server** (`swaption_be` `rp_api` + relay): `Req`/`Resp`/
+2. **Connect server** (`liquidconnect-server` `connect/rp_api` + relay): `Req`/`Resp`/
    `Notif` variants and the relay path. Validates the asset id shape on
    the way in; the amount is a `u64` and needs no check. No FCM.
-3. **Wallet server** (`agentic_wallet`): `/v1/connect/asset-balance/
+3. **Wallet server** (`liquidconnect-server`): `/v1/connect/asset-balance/
    {start,status}` for RPs on the relay path.
 4. **App**: sum the main account's confirmed coins for the asset; answer
    silently; reject on any failure so the RP does not wait out the TTL.

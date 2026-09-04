@@ -53,7 +53,7 @@ that way are separate accounts under the new derivation — testnet-only
 state existed at the switch, migrated by withdraw-and-redeposit.)
 
 Cross-repo pinned invariants — the SDK is now one side of pins in
-**three** repos (`agentic-wallet-server` for identity,
+**three** repos (`liquidconnect-server` for identity,
 `rolling-future` for the venue digests). The rule is always the same:
 **never change one side alone.**
 
@@ -159,6 +159,6 @@ Rust-less Flutter wallet actually asks for it.
   for Android ABIs, an XCFramework for iOS — CI work, since the dev
   host has neither NDK nor Xcode. `bindings/README.md` sketches the
   shape.
-- The server counterpart lives in `sideswap-io/agentic-wallet-server`;
-  the public gateway pages in `sideswap-io/liquidconnect-web`. Ask for
+- The server counterpart lives in `liquidconnect/liquidconnect-server`;
+  the public gateway pages in `liquidconnect/liquidconnect-web`. Ask for
   access if your work touches either.

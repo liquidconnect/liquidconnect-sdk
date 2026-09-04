@@ -3,7 +3,7 @@
 Status: BUILT 2026-08-31 (same day, Scott's green light; Pavel deferred
 until a public merge). All five layers: SDK wire/core/FFI (`c468a88`,
 e2e example `9da6d88`), swaption_be relay (`rf-pay-request-deploy`
-`72051ca`), agentic-wallet-server `/v1/connect/pay/{start,status}`
+`72051ca`), liquidconnect-server `/v1/connect/pay/{start,status}`
 (`632dff5`, compose 0.12.0), app send-flow + Pay dialog (sideswap_rust
 lc-sdk `c9b6382`, sideswapclient lc-sdk `fe2abfe`), venue deposit
 button (rolling-future `351db06`, venue session). Relay proven live
@@ -99,13 +99,14 @@ plugs in its own builder.
   before asking. Optionally add a helper that checks the built PSET pays
   `recipient` the stated `amount` of `asset_id` and flags any mismatch.
 
-### 2. `swaption_be` `connect_server` + `rp_api`
+### 2. `liquidconnect-server` `connect/connect_server` + `connect/rp_api`
+(imported from `sideswap-io/swaption_be` `rf-pay-request-deploy`)
 - Relay the pay request RP → wallet, like `StartSignMessage`: `rp_api`
   `StartPay`/`PayRequest(Status)`/`CancelPayRequest`; `connect_server`
   state machine validates the intent shape (address, asset hex, amount)
   and relays opaquely; result status carries the txid.
 
-### 3. `agentic-wallet-server`
+### 3. `liquidconnect-server`
 - Relay route `/v1/connect/pay/{start,status}` mirroring the
   sign-message relay (bearer-authed, non-spending — it only carries the
   intent and reports the txid; the *wallet* spends). `start` takes
