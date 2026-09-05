@@ -56,11 +56,31 @@ Canonical JSON in `FundRequest.memo` (u64 fields as strings, hex lower):
     {"kind":"sw/lend/exercise/v1","amount":"1550000000000",
      "released":"25000000","remaining":"1550000000000","cash":"<asset id hex>"}
 
-`fill`: the borrower sells `size` L-BTC for `sale` of `cash`, may buy
-back for `buyback` until block `expiry`; `fee` is Swaption's fill fee
-taken from the borrower's cash. `exercise`: the borrower pays `amount`
-of `cash` and `released` L-BTC come back; `remaining` is the debt left
-after (0 = full).
+`fill`: the borrower sells `size` of the collateral for `sale` of `cash`,
+may buy back for `buyback` until block `expiry`; `fee` is Swaption's fill
+fee taken from the borrower's cash. `exercise`: the borrower pays `amount`
+of `cash` and `released` of the collateral come back; `remaining` is the
+debt left after (0 = full).
+
+**`collateral` (optional, every fill and exercise kind; added 2026-09-05).**
+The asset id (hex) of what the borrower sold. Absent means the policy
+asset, L-BTC, as every position was before the lending venue listed all
+crosses of L-BTC, USDt and DePix. Present, it replaces the policy asset in
+every collateral check below and in the terms digest; present but
+malformed is a refusal. A wallet built before the field existed treats
+the memo as an L-BTC claim and refuses a USDt- or DePix-collateral
+template on the first collateral check — a safe failure, not a wrong
+approval. A pair whose CASH is L-BTC (USDt/L-BTC, DePix/L-BTC) needs no
+memo change: `cash` already carries the asset.
+
+An exercise of a non-L-BTC collateral has no L-BTC in it, so the venue
+adds its own L-BTC fee coin as input 2 with its change after the
+borrower's rows, and holds the fee's value in collateral back from the
+released amount (`released` in the memo is what the wallet receives, as
+before). The covenant's exercise branch inspects only inputs 0–1 and
+outputs 0–2, so the extra rows are the venue's business; the wallet's
+rule 2 (every other asset's deficit ≤ 0) is what keeps the venue from
+charging the wallet for them.
 
 `sw/lend/fill/v2` adds `payout` (hex SHA-256 of the lender payout
 scriptPubKey); the wallet rebuilds the v2 position script from the terms
@@ -93,8 +113,8 @@ recognises as paying its own addresses (`mine`).
 
 | Claim | Check |
 |---|---|
-| fill | `asset_id` is the collateral (policy) asset and `amount == size`; output 0 (the position) is `size` of the policy asset; output 3 is an OP_RETURN whose 80-byte payload has `cash`, `buyback`, `expiry` at the metadata offsets (`lending_contracts` `SwaptionPositionCreationMetadata`: program_id 4 · cash 32 · buyback u64 LE · expiry u32 LE · lender script hash 32); some output in `mine` pays exactly `sale − fee` of `cash`; output 1 (borrower NFT) is in `mine` |
-| exercise | `asset_id == cash` and `amount == claim.amount`; owned input 0 is a 1-unit asset (the borrower NFT); if `remaining > 0`: output 0 in `mine` carries that same asset (round-trip) and output 1 is the policy asset; else output 0 is an OP_RETURN (burn); some output in `mine` pays ≥ `released` of the policy asset (the template may net the fee from it — the wallet shows the number it found) |
+| fill | `asset_id` is the collateral (`collateral`, else the policy asset) and `amount == size`; output 0 (the position) is `size` of the collateral; output 3 is an OP_RETURN whose 80-byte payload has `cash`, `buyback`, `expiry` at the metadata offsets (`lending_contracts` `SwaptionPositionCreationMetadata`: program_id 4 · cash 32 · buyback u64 LE · expiry u32 LE · lender script hash 32); some output in `mine` pays exactly `sale − fee` of `cash`; output 1 (borrower NFT) is in `mine` |
+| exercise | `asset_id == cash` and `amount == claim.amount`; owned input 0 is a 1-unit asset (the borrower NFT); if `remaining > 0`: output 0 in `mine` carries that same asset (round-trip) and output 1 is the collateral; else output 0 is an OP_RETURN (burn); some output in `mine` pays ≥ `released` of the collateral (the template may net the fee from it — the wallet shows the number it found) |
 
 What the wallet cannot check and does not pretend to: that output 0's
 script is the covenant for exactly these terms (it cannot compile
@@ -104,10 +124,15 @@ SIGHASH_ALL signature means nothing changes afterwards. A dishonest RP
 can build a bad covenant, but not take more than `amount + owned inputs`
 from this wallet — the fund-template bound holds regardless.
 
-### Rendering (`TypedFund::render`)
+### Rendering (`TypedFund::render_with(collateral_symbol, cash_symbol)`)
 
 - fill: "Sell 0.5 BTC for 30,000 USDt · buy back for 31,000 USDt until block 3,200,000 · Swaption fee 30 USDt"
 - exercise: "Buy back 0.25 BTC for 15,500 USDt · 15,500 USDt still owed after" / "… · position closed"
+- a USDt-collateral position bought back with L-BTC: "Buy back 499.7 USDt for 0.006 BTC · 5,000 USDt still owed after"
+
+The host looks the collateral symbol up from `TypedFund::collateral()`
+(None = the policy asset). `render(cash_symbol)` remains and assumes
+"BTC".
 
 The host substitutes this for the memo text in its dialog and adds
 "also spends: your position token" when owned inputs are present.

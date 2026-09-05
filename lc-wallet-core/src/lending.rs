@@ -18,15 +18,18 @@ use crate::approval::{OwnedInput, decode_pset};
 /// One typed lending claim, parsed from `FundRequest.memo`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypedFund {
-    /// The borrower sells `size` of the policy asset for `sale` of `cash`
+    /// The borrower sells `size` of the collateral for `sale` of `cash`
     /// and may buy it back for `buyback` until block `expiry`; `fee` is
-    /// the venue's fill fee, taken from the sale proceeds.
+    /// the venue's fill fee, taken from the sale proceeds. `collateral`
+    /// is the asset sold (memo field added 2026-09-05; absent = the
+    /// policy asset, L-BTC, as every fill was before).
     Fill {
         size: u64,
         sale: u64,
         buyback: u64,
         expiry: u32,
         cash: elements::AssetId,
+        collateral: Option<elements::AssetId>,
         fee: u64,
     },
     /// Like `Fill`, for the v2 covenant (one constant program): the wallet
@@ -39,6 +42,7 @@ pub enum TypedFund {
         buyback: u64,
         expiry: u32,
         cash: elements::AssetId,
+        collateral: Option<elements::AssetId>,
         fee: u64,
         payout: [u8; 32],
     },
@@ -52,6 +56,7 @@ pub enum TypedFund {
         buyback: u64,
         expiry: u32,
         cash: elements::AssetId,
+        collateral: Option<elements::AssetId>,
         fee: u64,
         payout: [u8; 32],
     },
@@ -66,6 +71,7 @@ pub enum TypedFund {
         buyback: u64,
         expiry: u32,
         cash: elements::AssetId,
+        collateral: Option<elements::AssetId>,
         fee: u64,
         payout: [u8; 32],
         lastlook: [u8; 32],
@@ -77,6 +83,7 @@ pub enum TypedFund {
         buyback: u64,
         expiry: u32,
         cash: elements::AssetId,
+        collateral: Option<elements::AssetId>,
         fee: u64,
         payout: [u8; 32],
         lastlook: [u8; 32],
@@ -91,13 +98,15 @@ pub enum TypedFund {
         cash: elements::AssetId,
         fee: u64,
     },
-    /// The borrower pays `amount` of `cash`; `released` of the policy
-    /// asset comes back; `remaining` is the debt left (0 = full).
+    /// The borrower pays `amount` of `cash`; `released` of the collateral
+    /// comes back; `remaining` is the debt left (0 = full). `collateral`
+    /// as for `Fill` (absent = L-BTC).
     Exercise {
         amount: u64,
         released: u64,
         remaining: u64,
         cash: elements::AssetId,
+        collateral: Option<elements::AssetId>,
     },
 }
 
@@ -129,6 +138,13 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
         elements::AssetId::from_str(str_field(name)?)
             .map_err(|_| format!("field {name} is not an asset id"))
     };
+    // Optional: absent means the policy asset; present but malformed is a refusal.
+    let opt_asset_field = |name: &str| -> Result<Option<elements::AssetId>, String> {
+        match value.get(name) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(_) => asset_field(name).map(Some),
+        }
+    };
 
     match kind {
         "sw/lend/fill/v1" => Ok(TypedFund::Fill {
@@ -141,6 +157,7 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
                 .and_then(|v| u32::try_from(v).ok())
                 .ok_or("missing or invalid field: expiry")?,
             cash: asset_field("cash")?,
+            collateral: opt_asset_field("collateral")?,
             fee: u64_field("fee")?,
         }),
         "sw/lend/fill/v2" => {
@@ -156,6 +173,7 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
                     .and_then(|v| u32::try_from(v).ok())
                     .ok_or("missing or invalid field: expiry")?,
                 cash: asset_field("cash")?,
+                collateral: opt_asset_field("collateral")?,
                 fee: u64_field("fee")?,
                 payout,
             })
@@ -173,6 +191,7 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
                     .and_then(|v| u32::try_from(v).ok())
                     .ok_or("missing or invalid field: expiry")?,
                 cash: asset_field("cash")?,
+                collateral: opt_asset_field("collateral")?,
                 fee: u64_field("fee")?,
                 payout,
             })
@@ -192,6 +211,7 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
                     .and_then(|v| u32::try_from(v).ok())
                     .ok_or("missing or invalid field: expiry")?,
                 cash: asset_field("cash")?,
+                collateral: opt_asset_field("collateral")?,
                 fee: u64_field("fee")?,
                 payout,
                 lastlook,
@@ -217,6 +237,7 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
                     .and_then(|v| u32::try_from(v).ok())
                     .ok_or("missing or invalid field: expiry")?,
                 cash: asset_field("cash")?,
+                collateral: opt_asset_field("collateral")?,
                 fee: u64_field("fee")?,
                 payout,
                 lastlook,
@@ -237,6 +258,7 @@ fn parse_fields(kind: &str, value: &serde_json::Value) -> Result<TypedFund, Stri
             released: u64_field("released")?,
             remaining: u64_field("remaining")?,
             cash: asset_field("cash")?,
+            collateral: opt_asset_field("collateral")?,
         }),
         other => Err(format!("unknown typed fund kind: {other}")),
     }
@@ -308,15 +330,17 @@ pub fn verify_typed_fund(
             buyback,
             expiry,
             cash,
+            collateral,
             fee,
         } => {
-            anyhow::ensure!(requested == policy_asset, "fill: the funded asset must be the collateral asset");
+            let collateral = collateral.unwrap_or(policy_asset);
+            anyhow::ensure!(requested == collateral, "fill: the funded asset must be the collateral asset");
             anyhow::ensure!(amount == *size, "fill: stated size {size} does not equal the funded amount {amount}");
             anyhow::ensure!(*buyback > *sale, "fill: buyback must exceed the sale price");
 
             let (asset, value) = explicit(FILL_POSITION_OUTPUT)?;
             anyhow::ensure!(
-                asset == policy_asset && value == *size,
+                asset == collateral && value == *size,
                 "fill: output 0 is not {size} of the collateral asset"
             );
             let (_, nft) = explicit(FILL_BORROWER_NFT_OUTPUT)?;
@@ -357,15 +381,17 @@ pub fn verify_typed_fund(
             buyback,
             expiry,
             cash,
+            collateral,
             fee,
             payout,
         } => {
-            anyhow::ensure!(requested == policy_asset, "fill: the funded asset must be the collateral asset");
+            let collateral = collateral.unwrap_or(policy_asset);
+            anyhow::ensure!(requested == collateral, "fill: the funded asset must be the collateral asset");
             anyhow::ensure!(amount == *size, "fill: stated size {size} does not equal the funded amount {amount}");
             anyhow::ensure!(*buyback > *sale, "fill: buyback must exceed the sale price");
 
             let (asset, value) = explicit(FILL_POSITION_OUTPUT)?;
-            anyhow::ensure!(asset == policy_asset && value == *size, "fill: output 0 is not {size} of the collateral asset");
+            anyhow::ensure!(asset == collateral && value == *size, "fill: output 0 is not {size} of the collateral asset");
             let (borrower_nft, nft) = explicit(FILL_BORROWER_NFT_OUTPUT)?;
             anyhow::ensure!(nft == 1 && is_mine(FILL_BORROWER_NFT_OUTPUT), "fill: output 1 must pay this wallet its position token");
             let (lender_nft, nft2) = explicit(FILL_LENDER_NFT_OUTPUT)?;
@@ -373,7 +399,7 @@ pub fn verify_typed_fund(
 
             // THE covenant check: the position output must be the constant
             // program with exactly these terms and the full debt.
-            let digest = v2_terms_digest(policy_asset, *cash, *size, *buyback, *expiry, borrower_nft, lender_nft, payout);
+            let digest = v2_terms_digest(collateral, *cash, *size, *buyback, *expiry, borrower_nft, lender_nft, payout);
             let expected = v2_position_script(&digest, *buyback);
             let out0 = outputs.get(FILL_POSITION_OUTPUT).expect("checked above");
             anyhow::ensure!(
@@ -398,15 +424,17 @@ pub fn verify_typed_fund(
             buyback,
             expiry,
             cash,
+            collateral,
             fee,
             payout,
         } => {
-            anyhow::ensure!(requested == policy_asset, "fill: the funded asset must be the collateral asset");
+            let collateral = collateral.unwrap_or(policy_asset);
+            anyhow::ensure!(requested == collateral, "fill: the funded asset must be the collateral asset");
             anyhow::ensure!(amount == *size, "fill: stated size {size} does not equal the funded amount {amount}");
             anyhow::ensure!(*buyback > *sale, "fill: buyback must exceed the sale price");
 
             let (asset, value) = explicit(FILL_POSITION_OUTPUT)?;
-            anyhow::ensure!(asset == policy_asset && value == *size, "fill: output 0 is not {size} of the collateral asset");
+            anyhow::ensure!(asset == collateral && value == *size, "fill: output 0 is not {size} of the collateral asset");
             let (borrower_nft, nft) = explicit(FILL_BORROWER_NFT_OUTPUT)?;
             anyhow::ensure!(nft == 1 && is_mine(FILL_BORROWER_NFT_OUTPUT), "fill: output 1 must pay this wallet its position token");
             let (lender_nft, nft2) = explicit(FILL_LENDER_NFT_OUTPUT)?;
@@ -421,7 +449,7 @@ pub fn verify_typed_fund(
 
             // THE covenant check: the position output must be the constant
             // program with exactly these terms and the full debt.
-            let digest = v2_terms_digest(policy_asset, *cash, *size, *buyback, *expiry, borrower_nft, lender_nft, payout);
+            let digest = v2_terms_digest(collateral, *cash, *size, *buyback, *expiry, borrower_nft, lender_nft, payout);
             let expected = v3_position_script(&digest, *buyback);
             let out0 = outputs.get(FILL_POSITION_OUTPUT).expect("checked above");
             anyhow::ensure!(
@@ -446,17 +474,19 @@ pub fn verify_typed_fund(
             buyback,
             expiry,
             cash,
+            collateral,
             fee,
             payout,
             lastlook,
             lastlook_height,
         } => {
-            anyhow::ensure!(requested == policy_asset, "fill: the funded asset must be the collateral asset");
+            let collateral = collateral.unwrap_or(policy_asset);
+            anyhow::ensure!(requested == collateral, "fill: the funded asset must be the collateral asset");
             anyhow::ensure!(amount == *size, "fill: stated size {size} does not equal the funded amount {amount}");
             anyhow::ensure!(*buyback > *sale, "fill: buyback must exceed the sale price");
 
             let (asset, value) = explicit(FILL_POSITION_OUTPUT)?;
-            anyhow::ensure!(asset == policy_asset && value == *size, "fill: output 0 is not {size} of the collateral asset");
+            anyhow::ensure!(asset == collateral && value == *size, "fill: output 0 is not {size} of the collateral asset");
             let (borrower_nft, nft) = explicit(FILL_BORROWER_NFT_OUTPUT)?;
             anyhow::ensure!(nft == 1 && is_mine(FILL_BORROWER_NFT_OUTPUT), "fill: output 1 must pay this wallet its position token");
             let (lender_nft, nft2) = explicit(FILL_LENDER_NFT_OUTPUT)?;
@@ -485,7 +515,7 @@ pub fn verify_typed_fund(
                 *lastlook_height == 0 || *lastlook_height < *expiry,
                 "fill: the last-look height must be before expiry"
             );
-            let digest = v4_terms_digest(policy_asset, *cash, *size, *buyback, *expiry, borrower_nft, lender_nft, payout, &borrower_hash, lastlook, *lastlook_height);
+            let digest = v4_terms_digest(collateral, *cash, *size, *buyback, *expiry, borrower_nft, lender_nft, payout, &borrower_hash, lastlook, *lastlook_height);
             let expected = v4_position_script(&digest, *buyback);
             let out0 = outputs.get(FILL_POSITION_OUTPUT).expect("checked above");
             anyhow::ensure!(
@@ -510,17 +540,19 @@ pub fn verify_typed_fund(
             buyback,
             expiry,
             cash,
+            collateral,
             fee,
             payout,
             lastlook,
             lastlook_height,
         } => {
-            anyhow::ensure!(requested == policy_asset, "fill: the funded asset must be the collateral asset");
+            let collateral = collateral.unwrap_or(policy_asset);
+            anyhow::ensure!(requested == collateral, "fill: the funded asset must be the collateral asset");
             anyhow::ensure!(amount == *size, "fill: stated size {size} does not equal the funded amount {amount}");
             anyhow::ensure!(*buyback > *sale, "fill: buyback must exceed the sale price");
 
             let (asset, value) = explicit(FILL_POSITION_OUTPUT)?;
-            anyhow::ensure!(asset == policy_asset && value == *size, "fill: output 0 is not {size} of the collateral asset");
+            anyhow::ensure!(asset == collateral && value == *size, "fill: output 0 is not {size} of the collateral asset");
             let (borrower_nft, nft) = explicit(FILL_BORROWER_NFT_OUTPUT)?;
             anyhow::ensure!(nft == 1 && is_mine(FILL_BORROWER_NFT_OUTPUT), "fill: output 1 must pay this wallet its position token");
             let (lender_nft, nft2) = explicit(FILL_LENDER_NFT_OUTPUT)?;
@@ -549,7 +581,7 @@ pub fn verify_typed_fund(
                 *lastlook_height == 0 || *lastlook_height < *expiry,
                 "fill: the last-look height must be before expiry"
             );
-            let digest = v5_terms_digest(policy_asset, *cash, *size, *buyback, *expiry, borrower_nft, lender_nft, payout, &borrower_hash, lastlook, *lastlook_height);
+            let digest = v5_terms_digest(collateral, *cash, *size, *buyback, *expiry, borrower_nft, lender_nft, payout, &borrower_hash, lastlook, *lastlook_height);
             let expected = v5_position_script(&digest, *buyback);
             let out0 = outputs.get(FILL_POSITION_OUTPUT).expect("checked above");
             anyhow::ensure!(
@@ -596,7 +628,9 @@ pub fn verify_typed_fund(
             released,
             remaining,
             cash,
+            collateral,
         } => {
+            let collateral = collateral.unwrap_or(policy_asset);
             anyhow::ensure!(requested == *cash, "exercise: the funded asset must be the cash asset");
             anyhow::ensure!(amount == *pay, "exercise: stated amount {pay} does not equal the funded amount {amount}");
 
@@ -617,7 +651,7 @@ pub fn verify_typed_fund(
                     "exercise: output 0 must return the position token to this wallet"
                 );
                 let (asset, _) = explicit(1)?;
-                anyhow::ensure!(asset == policy_asset, "exercise: output 1 must be the continuing position");
+                anyhow::ensure!(asset == collateral, "exercise: output 1 must be the continuing position");
             } else {
                 let out = outputs.get(0).ok_or_else(|| anyhow::anyhow!("template has no output 0"))?;
                 anyhow::ensure!(
@@ -626,7 +660,7 @@ pub fn verify_typed_fund(
                 );
             }
 
-            let got = mine_paying(policy_asset)
+            let got = mine_paying(collateral)
                 .into_iter()
                 .filter(|v| *v >= *released)
                 .max()
@@ -831,8 +865,30 @@ pub fn op_return_payload(script: &elements::Script) -> Option<&[u8]> {
 }
 
 impl TypedFund {
-    /// Text for the approval dialog, from the verified fields.
+    /// Text for the approval dialog, from the verified fields, for a
+    /// claim whose collateral is L-BTC (shown as BTC). Prefer
+    /// `render_with`, which names the collateral: since 2026-09-05 a
+    /// position may hold USDt or DePix instead.
     pub fn render(&self, cash_symbol: &str) -> String {
+        self.render_with("BTC", cash_symbol)
+    }
+
+    /// The collateral the claim names, if it names one (absent = the
+    /// policy asset, L-BTC).
+    pub fn collateral(&self) -> Option<elements::AssetId> {
+        match self {
+            TypedFund::Fill { collateral, .. }
+            | TypedFund::FillV2 { collateral, .. }
+            | TypedFund::FillV3 { collateral, .. }
+            | TypedFund::FillV4 { collateral, .. }
+            | TypedFund::FillV5 { collateral, .. }
+            | TypedFund::Exercise { collateral, .. } => *collateral,
+            TypedFund::SellRight { .. } => None,
+        }
+    }
+
+    /// Text for the approval dialog, from the verified fields.
+    pub fn render_with(&self, collateral_symbol: &str, cash_symbol: &str) -> String {
         match self {
             TypedFund::Fill {
                 size,
@@ -842,7 +898,7 @@ impl TypedFund {
                 fee,
                 ..
             } => format!(
-                "Sell {} BTC for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol}",
+                "Sell {} {collateral_symbol} for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol}",
                 fmt8(*size),
                 fmt8(*sale),
                 fmt8(*buyback),
@@ -857,7 +913,7 @@ impl TypedFund {
                 fee,
                 ..
             } => format!(
-                "Sell {} BTC for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol}",
+                "Sell {} {collateral_symbol} for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol}",
                 fmt8(*size),
                 fmt8(*sale),
                 fmt8(*buyback),
@@ -872,7 +928,7 @@ impl TypedFund {
                 fee,
                 ..
             } => format!(
-                "Sell {} BTC for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol}",
+                "Sell {} {collateral_symbol} for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol}",
                 fmt8(*size),
                 fmt8(*sale),
                 fmt8(*buyback),
@@ -888,7 +944,7 @@ impl TypedFund {
                 lastlook_height,
                 ..
             } => format!(
-                "Sell {} BTC for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol} · from block {} Swaption may exercise an unused in-the-money right for you and pay you the surplus less its fee",
+                "Sell {} {collateral_symbol} for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol} · from block {} Swaption may exercise an unused in-the-money right for you and pay you the surplus less its fee",
                 fmt8(*size),
                 fmt8(*sale),
                 fmt8(*buyback),
@@ -905,7 +961,7 @@ impl TypedFund {
                 lastlook_height,
                 ..
             } => format!(
-                "Sell {} BTC for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol} · from block {} Swaption may exercise an unused in-the-money right for you and pay you the surplus less its fee",
+                "Sell {} {collateral_symbol} for {} {cash_symbol} · buy back for {} {cash_symbol} until block {} · fee {} {cash_symbol} · from block {} Swaption may exercise an unused in-the-money right for you and pay you the surplus less its fee",
                 fmt8(*size),
                 fmt8(*sale),
                 fmt8(*buyback),
@@ -930,7 +986,7 @@ impl TypedFund {
                     "position closed".to_owned()
                 };
                 format!(
-                    "Buy back {} BTC for {} {cash_symbol} · {tail}",
+                    "Buy back {} {collateral_symbol} for {} {cash_symbol} · {tail}",
                     fmt8(*released),
                     fmt8(*amount)
                 )
@@ -1157,6 +1213,60 @@ mod tests {
         // A partial claim against a full (burn) template.
         let err = verify_typed_fund(&partial, &b64(&exercise_template(false)), USDT, 15_500_00000000, lbtc, &[0, 2], &owned_nft()).unwrap_err();
         assert!(err.to_string().contains("return the position token"), "{err}");
+    }
+
+    /// A USDt-collateral position (USDt/L-BTC market) bought back with
+    /// L-BTC, partial: the dealer pays the network fee from its own coin
+    /// (input 2) and takes the fee's value back in USDt (output 4); the
+    /// released USDt reaches the wallet whole less that holdback.
+    fn exercise_template_usdt_collateral() -> pset::PartiallySignedTransaction {
+        const DEALER_LBTC_IN: u64 = 5_000;
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        let mut nft_in = pset::Input::from_prevout(elements::OutPoint::new(elements::Txid::from_str(&"21".repeat(32)).unwrap(), 1));
+        nft_in.witness_utxo = Some(txout(NFT, 1, spk(0x01)));
+        tx.add_input(nft_in);
+        let mut pos_in = pset::Input::from_prevout(elements::OutPoint::new(elements::Txid::from_str(&"22".repeat(32)).unwrap(), 0));
+        pos_in.witness_utxo = Some(txout(USDT, 1_000_00000000, spk(0xc0)));
+        tx.add_input(pos_in);
+        let mut fee_in = pset::Input::from_prevout(elements::OutPoint::new(elements::Txid::from_str(&"23".repeat(32)).unwrap(), 0));
+        fee_in.witness_utxo = Some(txout(LBTC, DEALER_LBTC_IN, spk(0xab)));
+        tx.add_input(fee_in);
+        tx.add_output(pset::Output::from_txout(txout(NFT, 1, spk(0x01)))); // 0 NFT back
+        tx.add_output(pset::Output::from_txout(txout(USDT, 500_00000000, spk(0xc1)))); // 1 position continues (USDt)
+        tx.add_output(pset::Output::from_txout(txout(LBTC, 600_000, spk(0xaa)))); // 2 lender paid in L-BTC
+        tx.add_output(pset::Output::from_txout(txout(USDT, 500_00000000 - 30_000_000, spk(0x01)))); // 3 released USDt to the wallet
+        tx.add_output(pset::Output::from_txout(txout(USDT, 30_000_000, spk(0xab)))); // 4 fee holdback to the dealer
+        tx.add_output(pset::Output::from_txout(txout(LBTC, DEALER_LBTC_IN - 270, spk(0xab)))); // 5 dealer L-BTC change
+        tx.add_output(pset::Output::from_txout(txout(LBTC, 270, Script::new()))); // 6 fee
+        tx
+    }
+
+    #[test]
+    fn exercise_of_a_non_lbtc_collateral_names_the_collateral() {
+        let lbtc = AssetId::from_str(LBTC).unwrap();
+        let named = parse_typed_fund(&format!(
+            r#"{{"kind":"sw/lend/exercise/v1","amount":"600000","released":"49970000000","remaining":"500000000000","cash":"{LBTC}","collateral":"{USDT}"}}"#
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(named.collateral(), Some(AssetId::from_str(USDT).unwrap()));
+        let check = verify_typed_fund(&named, &b64(&exercise_template_usdt_collateral()), LBTC, 600_000, lbtc, &[0, 3], &owned_nft()).unwrap();
+        assert_eq!(check.receives, 49_970_000_000);
+        assert_eq!(named.render_with("USDt", "BTC"), "Buy back 499.7 USDt for 0.006 BTC · 5000 BTC still owed after");
+
+        // The same memo without `collateral` is an L-BTC claim: the
+        // continuing position is not L-BTC, so a pre-2026-09-05 wallet refuses.
+        let legacy = parse_typed_fund(&format!(
+            r#"{{"kind":"sw/lend/exercise/v1","amount":"600000","released":"49970000000","remaining":"500000000000","cash":"{LBTC}"}}"#
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(legacy.collateral(), None);
+        let err = verify_typed_fund(&legacy, &b64(&exercise_template_usdt_collateral()), LBTC, 600_000, lbtc, &[0, 3], &owned_nft()).unwrap_err();
+        assert!(err.to_string().contains("continuing position"), "{err}");
+
+        // A malformed collateral id is a refusal, not a fallback.
+        assert!(parse_typed_fund(r#"{"kind":"sw/lend/exercise/v1","amount":"1","released":"1","remaining":"0","cash":"00","collateral":"zz"}"#).unwrap().is_err());
     }
 
     #[test]
