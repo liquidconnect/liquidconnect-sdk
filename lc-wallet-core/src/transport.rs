@@ -41,6 +41,13 @@ pub enum WalletEvent {
     AssetBalanceRequestRemoved {
         request_id: String,
     },
+    /// An RP reported what it holds for this wallet — a venue's margin and
+    /// position, a lending desk's collateral. Render it under the RP's
+    /// name with its age; nothing to answer (docs/held-balances-spec.md).
+    HoldingsUpdated(wire::HoldingsReport),
+    HoldingsRemoved {
+        domain: String,
+    },
     SignMessageRequestRemoved { request_id: String },
 
     PayRequested(wire::PayRequest),
@@ -284,6 +291,8 @@ fn apply_effects(
             Effect::RemoveAssetBalanceRequest { request_id } => {
                 WalletEvent::AssetBalanceRequestRemoved { request_id }
             }
+            Effect::SetHoldings { report } => WalletEvent::HoldingsUpdated(report),
+            Effect::ClearHoldings { domain } => WalletEvent::HoldingsRemoved { domain },
             Effect::RemoveSignMessageRequest { request_id } => {
                 WalletEvent::SignMessageRequestRemoved { request_id }
             }

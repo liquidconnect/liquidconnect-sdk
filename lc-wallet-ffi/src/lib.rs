@@ -136,6 +136,12 @@ pub enum WalletEvent {
     /// docs/asset-balance-spec.md.
     AssetBalanceRequested { request: AssetBalanceRequestInfo },
     AssetBalanceRequestRemoved { request_id: String },
+    /// An RP reported what it holds for this wallet (a venue's margin
+    /// balance and position, a lending desk's collateral). Nothing to
+    /// answer: show it under the RP's name, with its age — see
+    /// docs/held-balances-spec.md. An update replaces the whole entry.
+    HoldingsUpdated { report: HoldingsReportInfo },
+    HoldingsRemoved { domain: String },
     PayRequested { request: PayRequestInfo },
     PayRequestRemoved { request_id: String },
     FundRequested { request: FundRequestInfo },
@@ -208,6 +214,45 @@ pub struct AssetBalanceRequestInfo {
     /// Liquid asset id, 64 hex chars.
     pub asset_id: String,
     pub ttl_ms: u64,
+}
+
+#[derive(uniffi::Record)]
+pub struct HoldingInfo {
+    pub label: String,
+    /// "balance", "position", "collateral", "credit" — or anything else
+    pub kind: String,
+    pub asset_id: Option<String>,
+    pub unit: String,
+    /// base units, signed (a short position is negative)
+    pub amount: i64,
+    pub precision: u8,
+}
+
+#[derive(uniffi::Record)]
+pub struct HoldingsReportInfo {
+    pub domain: String,
+    pub holdings: Vec<HoldingInfo>,
+    /// unix ms, as the RP stamped it
+    pub as_of_ms: i64,
+}
+
+fn holdings_info(r: wire::HoldingsReport) -> HoldingsReportInfo {
+    HoldingsReportInfo {
+        domain: r.domain,
+        as_of_ms: r.as_of,
+        holdings: r
+            .holdings
+            .into_iter()
+            .map(|h| HoldingInfo {
+                label: h.label,
+                kind: h.kind,
+                asset_id: h.asset_id,
+                unit: h.unit,
+                amount: h.amount,
+                precision: h.precision,
+            })
+            .collect(),
+    }
 }
 
 fn session_info(s: wire::Session) -> SessionInfo {
@@ -319,6 +364,12 @@ fn map_event(event: transport::WalletEvent) -> WalletEvent {
         }
         transport::WalletEvent::AssetBalanceRequestRemoved { request_id } => {
             WalletEvent::AssetBalanceRequestRemoved { request_id }
+        }
+        transport::WalletEvent::HoldingsUpdated(r) => WalletEvent::HoldingsUpdated {
+            report: holdings_info(r),
+        },
+        transport::WalletEvent::HoldingsRemoved { domain } => {
+            WalletEvent::HoldingsRemoved { domain }
         }
         transport::WalletEvent::ActionFailed { action, message } => {
             let (action, subject_id) = action_parts(action);

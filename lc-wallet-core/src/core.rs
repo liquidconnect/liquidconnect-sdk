@@ -154,6 +154,11 @@ pub enum Effect {
     AddAssetBalanceRequest { request: wire::AssetBalanceRequest },
     RemoveAssetBalanceRequest { request_id: String },
 
+    /// An RP's holdings for this wallet changed (or arrived at login).
+    /// Nothing to answer; the host renders it (docs/held-balances-spec.md).
+    SetHoldings { report: wire::HoldingsReport },
+    ClearHoldings { domain: String },
+
     AddPayRequest { request: wire::PayRequest },
     RemovePayRequest { request_id: String },
 
@@ -192,6 +197,8 @@ pub struct WalletConnectCore {
     sign_message_requests: BTreeMap<String, wire::SignMessageRequest>,
     receive_address_requests: BTreeMap<String, wire::ReceiveAddressRequest>,
     asset_balance_requests: BTreeMap<String, wire::AssetBalanceRequest>,
+    /// domain -> what that RP last reported holding for this wallet
+    holdings: BTreeMap<String, wire::HoldingsReport>,
     pay_requests: BTreeMap<String, wire::PayRequest>,
     fund_requests: BTreeMap<String, wire::FundRequest>,
 
@@ -222,6 +229,7 @@ impl WalletConnectCore {
             sign_message_requests: BTreeMap::new(),
             receive_address_requests: BTreeMap::new(),
             asset_balance_requests: BTreeMap::new(),
+            holdings: BTreeMap::new(),
             pay_requests: BTreeMap::new(),
             fund_requests: BTreeMap::new(),
             user_actions: BTreeMap::new(),
@@ -384,6 +392,33 @@ impl WalletConnectCore {
         }
     }
 
+    /// Login carries every RP's last holdings report: what the server
+    /// holds is the truth, so an entry the server no longer has is
+    /// cleared and every one it has is (re)stated — the host redraws.
+    fn sync_holdings(&mut self, reports: Vec<wire::HoldingsReport>, effects: &mut Vec<Effect>) {
+        let new_domains = reports
+            .iter()
+            .map(|r| r.domain.clone())
+            .collect::<BTreeSet<_>>();
+        let gone = self
+            .holdings
+            .keys()
+            .filter(|d| !new_domains.contains(*d))
+            .cloned()
+            .collect::<Vec<_>>();
+        for domain in gone {
+            self.holdings.remove(&domain);
+            effects.push(Effect::ClearHoldings { domain });
+        }
+        for report in reports {
+            if report.holdings.is_empty() {
+                continue;
+            }
+            self.holdings.insert(report.domain.clone(), report.clone());
+            effects.push(Effect::SetHoldings { report });
+        }
+    }
+
     fn sync_asset_balance_requests(
         &mut self,
         asset_balance_requests: Vec<wire::AssetBalanceRequest>,
@@ -447,6 +482,7 @@ impl WalletConnectCore {
                 fund_requests,
                 receive_address_requests,
                 asset_balance_requests,
+                holdings,
             }) => {
                 self.login_succeed = true;
 
@@ -466,6 +502,7 @@ impl WalletConnectCore {
                 self.sync_fund_requests(fund_requests, effects);
                 self.sync_receive_address_requests(receive_address_requests, effects);
                 self.sync_asset_balance_requests(asset_balance_requests, effects);
+                self.sync_holdings(holdings, effects);
                 effects.push(Effect::SessionList { sessions });
                 self.send_fcm_token(effects);
             }
@@ -567,6 +604,26 @@ impl WalletConnectCore {
                 effects.push(Effect::RemoveAssetBalanceRequest {
                     request_id: n.request_id,
                 });
+            }
+
+            wire::Notif::HoldingsUpdated(n) => {
+                if n.report.holdings.is_empty() {
+                    // an empty report is a clear, whichever way it is sent
+                    self.holdings.remove(&n.report.domain);
+                    effects.push(Effect::ClearHoldings {
+                        domain: n.report.domain,
+                    });
+                } else {
+                    self.holdings
+                        .insert(n.report.domain.clone(), n.report.clone());
+                    effects.push(Effect::SetHoldings { report: n.report });
+                }
+            }
+
+            wire::Notif::HoldingsRemoved(n) => {
+                if self.holdings.remove(&n.domain).is_some() {
+                    effects.push(Effect::ClearHoldings { domain: n.domain });
+                }
             }
 
             wire::Notif::PayRequestCreated(notif) => {
@@ -1203,6 +1260,80 @@ mod tests {
             e,
             Effect::RemoveSignMessageRequest { request_id } if request_id == "p1"
         )));
+    }
+
+    /// Holdings are the RP's word, stated at login and restated on every
+    /// change: a report sets the entry, an empty report or a Removed
+    /// clears it, and a relogin that no longer carries a domain clears it
+    /// too. Nothing is ever sent back (docs/held-balances-spec.md).
+    #[test]
+    fn holdings_follow_login_and_notifications() {
+        let mut core = core();
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+        let report = r#"{"domain":"paper.swaption.io","as_of":1788619197000,"holdings":[{"label":"Margin balance","kind":"balance","asset_id":null,"unit":"USDt","amount":999417000000,"precision":8}]}"#;
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: format!(
+                    r#"{{"Resp":{{"id":0,"resp":{{"Login":{{"sessions":[],"sign_requests":[],"holdings":[{report}]}}}}}}}}"#
+                ),
+            },
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::SetHoldings { report } if report.domain == "paper.swaption.io" && report.holdings[0].amount == 999_417_000_000
+        )));
+        assert!(sent_frames(&effects).iter().all(|f| !f.contains("Holdings")));
+
+        // a change arrives as a notification and replaces the entry
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Notif":{"notif":{"HoldingsUpdated":{"report":{"domain":"paper.swaption.io","as_of":1788619200000,"holdings":[{"label":"Position","kind":"position","asset_id":null,"unit":"BTC","amount":-5,"precision":8}]}}}}}"#.to_owned(),
+            },
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::SetHoldings { report } if report.holdings.len() == 1 && report.holdings[0].amount == -5
+        )));
+        assert_eq!(core.holdings["paper.swaption.io"].holdings[0].label, "Position");
+
+        // an empty report clears
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Notif":{"notif":{"HoldingsUpdated":{"report":{"domain":"paper.swaption.io","as_of":1788619300000,"holdings":[]}}}}}"#.to_owned(),
+            },
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::ClearHoldings { domain } if domain == "paper.swaption.io"
+        )));
+        assert!(core.holdings.is_empty());
+
+        // set again, then a relogin without it clears it
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: format!(r#"{{"Notif":{{"notif":{{"HoldingsUpdated":{{"report":{report}}}}}}}}}"#),
+            },
+        });
+        assert_eq!(core.holdings.len(), 1);
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Disconnected,
+        });
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Connected,
+        });
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Resp":{"id":0,"resp":{"Login":{"sessions":[],"sign_requests":[]}}}}"#
+                    .to_owned(),
+            },
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::ClearHoldings { domain } if domain == "paper.swaption.io"
+        )));
+        assert!(core.holdings.is_empty());
     }
 
     /// A pay approval sends the HOST-built txid on the accept action — the

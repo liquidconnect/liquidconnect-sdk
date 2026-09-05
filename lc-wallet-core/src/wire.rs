@@ -155,6 +155,43 @@ pub struct AssetBalanceRequest {
     pub ttl: DurationMs,
 }
 
+/// One line of what a relying party holds FOR this wallet: a venue's
+/// margin balance, its open position, a lending desk's collateral. Amounts
+/// are integers in the asset's base units (`10^precision` per whole unit),
+/// signed so a short position reads as negative. `asset_id` names a Liquid
+/// asset when there is one; a synthetic figure (a BTC-denominated position
+/// at a USDt-margined venue) has none and is described by `unit` alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Holding {
+    /// "Margin balance", "Position", "Collateral" — the RP's words, shown
+    /// as given, never parsed.
+    pub label: String,
+    /// A coarse kind the wallet may group or icon by: "balance",
+    /// "position", "collateral", "credit". Unknown kinds render as text.
+    pub kind: String,
+    pub asset_id: Option<String>,
+    pub unit: String,
+    pub amount: i64,
+    pub precision: u8,
+}
+
+/// What ONE relying party holds for this wallet, as that RP last reported
+/// it. Reported by the RP unprompted whenever it changes — there is no
+/// request and nothing to approve: the person consented to the session,
+/// and this only tells them what the site already knows about their own
+/// account there. The wallet cannot derive these numbers from the chain
+/// (a venue leaf sits inside a blinded pool output), so the RP's word is
+/// what there is; `as_of` lets the wallet say how old that word is. An RP
+/// that reports an empty list clears its entry. See
+/// docs/held-balances-spec.md.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldingsReport {
+    pub domain: String,
+    pub holdings: Vec<Holding>,
+    /// When the RP computed the figures (unix ms).
+    pub as_of: i64,
+}
+
 /// A relying party's request that the wallet PAY: build a transaction to
 /// `recipient` for `amount` of `asset_id` from the wallet's own coins, show
 /// the real constructed send (recipient, amount, network fee) for approval,
@@ -335,6 +372,10 @@ pub struct LoginResp {
     /// with pre-fund connect servers.
     #[serde(default)]
     pub fund_requests: Vec<FundRequest>,
+    /// What each relying party last reported holding for this wallet.
+    /// Defaulted for connect servers that predate holdings.
+    #[serde(default)]
+    pub holdings: Vec<HoldingsReport>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -416,6 +457,16 @@ pub struct AssetBalanceRequestRemovedNotif {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct HoldingsUpdatedNotif {
+    pub report: HoldingsReport,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HoldingsRemovedNotif {
+    pub domain: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PayRequestCreatedNotif {
     pub request: PayRequest,
 }
@@ -492,6 +543,9 @@ pub enum Notif {
     PayRequestRemoved(PayRequestRemovedNotif),
     FundRequestCreated(FundRequestCreatedNotif),
     FundRequestRemoved(FundRequestRemovedNotif),
+    /// An RP reported what it holds for this wallet (docs/held-balances-spec.md).
+    HoldingsUpdated(HoldingsUpdatedNotif),
+    HoldingsRemoved(HoldingsRemovedNotif),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -615,9 +669,33 @@ mod tests {
             Resp::Login(l) => {
                 assert!(l.receive_address_requests.is_empty());
                 assert!(l.asset_balance_requests.is_empty());
+                assert!(l.holdings.is_empty());
             }
             other => panic!("wrong parse: {other:?}"),
         }
+
+        // Holdings: reported by the RP, nothing to answer; a short
+        // position is a negative amount (docs/held-balances-spec.md).
+        let hold: From = serde_json::from_str(
+            r#"{"Notif":{"notif":{"HoldingsUpdated":{"report":{"domain":"paper.swaption.io","as_of":1788619197000,"holdings":[{"label":"Margin balance","kind":"balance","asset_id":"b612eb46313a2cd6ebabd8b7a8eed5696e29898b87a43bff41c94f51acef9d73","unit":"USDt","amount":999417000000,"precision":8},{"label":"Position","kind":"position","asset_id":null,"unit":"BTC","amount":-115997507,"precision":8}]}}}}}"#,
+        )
+        .unwrap();
+        match hold {
+            From::Notif {
+                notif: Notif::HoldingsUpdated(n),
+            } => {
+                assert_eq!(n.report.domain, "paper.swaption.io");
+                assert_eq!(n.report.holdings.len(), 2);
+                assert_eq!(n.report.holdings[1].amount, -115_997_507);
+                assert!(n.report.holdings[1].asset_id.is_none());
+            }
+            other => panic!("wrong parse: {other:?}"),
+        }
+        let gone: From = serde_json::from_str(
+            r#"{"Notif":{"notif":{"HoldingsRemoved":{"domain":"paper.swaption.io"}}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(gone, From::Notif { notif: Notif::HoldingsRemoved(n) } if n.domain == "paper.swaption.io"));
 
         let from: From = serde_json::from_str(
             r#"{"Notif":{"notif":{"SignRequestCreated":{"request":{"request_id":"s1","domain":"example.com","pset":"cHNldP8=","ttl":60000}}}}}"#,
