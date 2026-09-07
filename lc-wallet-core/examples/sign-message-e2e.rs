@@ -240,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 1. The typed venue order, clear-signed with the venue key.
     let (side, price, qty, expiry, nonce) = (venue::OrderSide::Sell, 7_700_000_000u64, 1_000u64, 50u32, 1u64);
-    let digest = venue::order_digest(&venue_pk, side, price, qty, expiry, nonce);
+    let digest = venue::order_digest(&venue_pk, side, price, qty, expiry, nonce, None);
     let description = format!(
         r#"{{"kind":"rf/order/v1","product":"RF-BTC-USDT","side":"sell","price":"{price}","qty":"{qty}","expiry":{expiry},"nonce":"{nonce}"}}"#
     );

@@ -81,7 +81,7 @@ fn signed_order(
     let session = st["session"].as_u64().expect("session") as u32;
     let nonce = st["me"]["nextNonce"].as_u64().expect("nextNonce");
     let expiry = session + 24;
-    let (digest, sig) = sign_order(key, side, price_raw, qty_raw, expiry, nonce);
+    let (digest, sig) = sign_order(key, side, price_raw, qty_raw, expiry, nonce, None);
     let side_s = if matches!(side, OrderSide::Buy) { "buy" } else { "sell" };
     let (price_s, qty_s) = (dec(price_raw), dec(qty_raw));
     let (expiry_s, nonce_s, sig_s) = (expiry.to_string(), nonce.to_string(), sig.to_string());

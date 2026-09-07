@@ -39,8 +39,8 @@ fn main() {
         ("order#1 sell", OrderSide::Sell, 7_700_000_000u64, 1_000u64, 50u32, 1u64),
         ("order#2 buy ", OrderSide::Buy, 11_500_000_000_000, 10_000_000, 100, 7),
     ] {
-        let (d, s) = sign_order(&key, side, price, qty, expiry, nonce);
-        debug_assert_eq!(d, order_digest(&pk, side, price, qty, expiry, nonce));
+        let (d, s) = sign_order(&key, side, price, qty, expiry, nonce, None);
+        debug_assert_eq!(d, order_digest(&pk, side, price, qty, expiry, nonce, None));
         println!("{label}  price={price} qty={qty} expiry={expiry} nonce={nonce}");
         println!("        digest         : {}", hex::encode(d));
         println!("        signature      : {}", s);

@@ -44,6 +44,19 @@ use elements::secp256k1_zkp::{Message, SECP256K1};
 use crate::key::Network;
 
 pub const ORDER_TAG: &[u8] = b"rf/order/v2";
+/// The pre-fee order digest. Still signed while the venue runs the v1
+/// pool; a wallet must speak both across the fee migration.
+pub const ORDER_TAG_V1: &[u8] = b"rf/order/v1";
+
+/// The taker fee caps an rf/order/v2 signer agrees to: `max_bps` basis
+/// points of the fill's notional in trading fee and `max_chain` L-BTC sats
+/// of network cost valued at the session price. `None` = an rf/order/v1
+/// order, which carries no caps and hashes under [`ORDER_TAG_V1`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeeCaps {
+    pub max_bps: u64,
+    pub max_chain: u64,
+}
 pub const WITHDRAW_TAG: &[u8] = b"rf/withdraw/v1";
 pub const LOGIN_TAG: &[u8] = b"rf/login/v1";
 pub const DELEGATE_TAG: &[u8] = b"rf/delegate/v1";
@@ -372,6 +385,11 @@ fn sha(m: &[u8]) -> [u8; 32] {
 /// charge the signer as taker. Makers are never charged. The covenant
 /// checks the venue's schedule against these on the paying side, so a
 /// venue cannot charge more than what was signed.
+///
+/// `caps: None` is an rf/order/v1 order: tag `rf/order/v1`, no cap bytes.
+/// The venue names the version in the typed description it sends
+/// (`kind`), so one wallet build signs for a v1 pool today and the v2
+/// pool after the fee migration without a redeploy on either side.
 pub fn order_digest(
     pk: &[u8; 32],
     side: OrderSide,
@@ -379,11 +397,10 @@ pub fn order_digest(
     qty: u64,
     expiry: u32,
     nonce: u64,
-    max_bps: u64,
-    max_chain: u64,
+    caps: Option<FeeCaps>,
 ) -> [u8; 32] {
     let mut m = Vec::with_capacity(ORDER_TAG.len() + 32 + PRODUCT.len() + 45);
-    m.extend_from_slice(ORDER_TAG);
+    m.extend_from_slice(if caps.is_some() { ORDER_TAG } else { ORDER_TAG_V1 });
     m.extend_from_slice(pk);
     m.extend_from_slice(PRODUCT);
     m.push(match side {
@@ -394,8 +411,10 @@ pub fn order_digest(
     m.extend_from_slice(&qty.to_be_bytes());
     m.extend_from_slice(&expiry.to_be_bytes());
     m.extend_from_slice(&nonce.to_be_bytes());
-    m.extend_from_slice(&max_bps.to_be_bytes());
-    m.extend_from_slice(&max_chain.to_be_bytes());
+    if let Some(FeeCaps { max_bps, max_chain }) = caps {
+        m.extend_from_slice(&max_bps.to_be_bytes());
+        m.extend_from_slice(&max_chain.to_be_bytes());
+    }
     sha(&m)
 }
 
@@ -534,7 +553,6 @@ pub fn sign_login(key: &VenueKey, challenge: &str) -> ([u8; 32], Signature) {
 }
 
 /// Sign an order commitment. Returns `(digest, signature)`.
-#[allow(clippy::too_many_arguments)]
 pub fn sign_order(
     key: &VenueKey,
     side: OrderSide,
@@ -542,10 +560,9 @@ pub fn sign_order(
     qty: u64,
     expiry: u32,
     nonce: u64,
-    max_bps: u64,
-    max_chain: u64,
+    caps: Option<FeeCaps>,
 ) -> ([u8; 32], Signature) {
-    let d = order_digest(&account_pk(key), side, price, qty, expiry, nonce, max_bps, max_chain);
+    let d = order_digest(&account_pk(key), side, price, qty, expiry, nonce, caps);
     (d, key.sign_digest(d))
 }
 
@@ -593,8 +610,8 @@ pub enum TypedRequest {
         /// fill against this order — `max_bps` basis points of notional
         /// in trading fee, `max_chain` L-BTC sats of network cost valued
         /// at the session price. Show them: they are what is being agreed.
-        max_bps: u64,
-        max_chain: u64,
+        /// `None` on an rf/order/v1 request (the pre-fee venue).
+        caps: Option<FeeCaps>,
     },
     /// A withdrawal paid to `dest` — the wallet's own receive address, so
     /// the funds land where the app's descriptor wallet can see them
@@ -654,7 +671,7 @@ fn parse_typed_fields(kind: &str, value: &serde_json::Value) -> Result<TypedRequ
     };
 
     match kind {
-        "rf/order/v2" => Ok(TypedRequest::Order {
+        "rf/order/v1" | "rf/order/v2" => Ok(TypedRequest::Order {
             product: str_field("product")?.to_owned(),
             side: match str_field("side")? {
                 "buy" => OrderSide::Buy,
@@ -669,8 +686,20 @@ fn parse_typed_fields(kind: &str, value: &serde_json::Value) -> Result<TypedRequ
                 .and_then(|v| u32::try_from(v).ok())
                 .ok_or("missing or invalid field: expiry")?,
             nonce: u64_field("nonce")?,
-            max_bps: u64_field("maxBps")?,
-            max_chain: u64_field("maxChain")?,
+            // v2 carries the caps and v2 alone; a v2 claim without them is
+            // malformed, a v1 claim with them is not a v1 claim
+            caps: match kind {
+                "rf/order/v2" => Some(FeeCaps {
+                    max_bps: u64_field("maxBps")?,
+                    max_chain: u64_field("maxChain")?,
+                }),
+                _ => {
+                    if value.get("maxBps").is_some() || value.get("maxChain").is_some() {
+                        return Err("rf/order/v1 carries no fee caps".to_owned());
+                    }
+                    None
+                }
+            },
         }),
         "rf/withdraw/v1" => {
             let mut root = [0u8; 32];
@@ -715,13 +744,12 @@ pub fn typed_request_digest(request: &TypedRequest, pk: &[u8; 32]) -> Result<[u8
             qty,
             expiry,
             nonce,
-            max_bps,
-            max_chain,
+            caps,
         } => {
             if product.as_bytes() != PRODUCT {
                 return Err(format!("unknown product: {product}"));
             }
-            Ok(order_digest(pk, *side, *price, *qty, *expiry, *nonce, *max_bps, *max_chain))
+            Ok(order_digest(pk, *side, *price, *qty, *expiry, *nonce, *caps))
         }
         TypedRequest::Withdraw { amt, dest, root } => {
             let address = dest
@@ -775,8 +803,21 @@ mod tests {
     fn shared_digest_vectors() {
         let pk = [3u8; 32];
         assert_eq!(
-            hex(&order_digest(&pk, OrderSide::Buy, 11_500_000_000_000, 10_000_000, 100, 7, 5, 2200)),
+            hex(&order_digest(
+                &pk,
+                OrderSide::Buy,
+                11_500_000_000_000,
+                10_000_000,
+                100,
+                7,
+                Some(FeeCaps { max_bps: 5, max_chain: 2200 })
+            )),
             "5640f0ee017addfece205ba8d1fbd264299248f3e78fa3ded5542360de167c89"
+        );
+        // the v1 vector (pre-fee venue) is still what a v1 request hashes to
+        assert_eq!(
+            hex(&order_digest(&pk, OrderSide::Buy, 11_500_000_000_000, 10_000_000, 100, 7, None)),
+            "944e4e036d891dd277fee0987c355b2609fb09d6fc149ee2e2fd2b907acf9512"
         );
         assert_eq!(
             hex(&login_digest(&pk, "c1")),
@@ -874,10 +915,25 @@ mod tests {
             hex(&typed_request_digest(&order, &pk).unwrap()),
             "5640f0ee017addfece205ba8d1fbd264299248f3e78fa3ded5542360de167c89"
         );
-        // a v1 claim (no fee caps) is no longer a thing the venue accepts:
-        // it must refuse, not rebuild a digest nobody will honour
+        // a v1 claim (no fee caps) is what the pre-fee venue sends; it
+        // rebuilds the v1 vector, so one wallet spans the fee migration
+        let order_v1 = parse_typed_description(
+            r#"{"kind":"rf/order/v1","product":"RF-BTC-USDT","side":"buy","price":"11500000000000","qty":"10000000","expiry":100,"nonce":"7"}"#,
+        )
+        .expect("typed")
+        .expect("well-formed");
+        assert_eq!(
+            hex(&typed_request_digest(&order_v1, &pk).unwrap()),
+            "944e4e036d891dd277fee0987c355b2609fb09d6fc149ee2e2fd2b907acf9512"
+        );
+        // caps on a v1 claim, or a v2 claim without them, are malformed
         assert!(parse_typed_description(
-            r#"{"kind":"rf/order/v1","product":"RF-BTC-USDT","side":"buy","price":"11500000000000","qty":"10000000","expiry":100,"nonce":"7"}"#
+            r#"{"kind":"rf/order/v1","product":"RF-BTC-USDT","side":"buy","price":"11500000000000","qty":"10000000","expiry":100,"nonce":"7","maxBps":"5","maxChain":"2200"}"#
+        )
+        .unwrap()
+        .is_err());
+        assert!(parse_typed_description(
+            r#"{"kind":"rf/order/v2","product":"RF-BTC-USDT","side":"buy","price":"11500000000000","qty":"10000000","expiry":100,"nonce":"7"}"#
         )
         .unwrap()
         .is_err());
@@ -942,8 +998,7 @@ mod tests {
             qty: 1,
             expiry: 1,
             nonce: 1,
-            max_bps: 5,
-            max_chain: 2200,
+            caps: Some(FeeCaps { max_bps: 5, max_chain: 2200 }),
         };
         assert!(typed_request_digest(&alien, &pk).is_err());
     }
@@ -1082,8 +1137,8 @@ mod tests {
     #[test]
     fn order_signature_verifies_and_is_deterministic() {
         let key = VenueKey::from_seed(&[7u8; 32], Network::LiquidTestnet).unwrap();
-        let (d, s) = sign_order(&key, OrderSide::Sell, 7_700_000_000, 1_000, 50, 1, 5, 2200);
-        let (d2, s2) = sign_order(&key, OrderSide::Sell, 7_700_000_000, 1_000, 50, 1, 5, 2200);
+        let (d, s) = sign_order(&key, OrderSide::Sell, 7_700_000_000, 1_000, 50, 1, Some(FeeCaps { max_bps: 5, max_chain: 2200 }));
+        let (d2, s2) = sign_order(&key, OrderSide::Sell, 7_700_000_000, 1_000, 50, 1, Some(FeeCaps { max_bps: 5, max_chain: 2200 }));
         assert_eq!((d, s), (d2, s2));
         // byte-stable — the property the rf-vectors example (the venue
         // signing test vectors) relies on
@@ -1096,7 +1151,7 @@ mod tests {
         assert!(SECP256K1
             .verify_schnorr(&s, &Message::from_digest(d), &key.public_key())
             .is_ok());
-        let (other, _) = sign_order(&key, OrderSide::Buy, 7_700_000_000, 1_000, 50, 1, 5, 2200);
+        let (other, _) = sign_order(&key, OrderSide::Buy, 7_700_000_000, 1_000, 50, 1, Some(FeeCaps { max_bps: 5, max_chain: 2200 }));
         assert!(SECP256K1
             .verify_schnorr(&s, &Message::from_digest(other), &key.public_key())
             .is_err());
