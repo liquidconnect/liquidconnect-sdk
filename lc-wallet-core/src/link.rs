@@ -36,6 +36,14 @@ pub struct AppLink {
     pub link_type: LinkType,
     pub request_id: String,
     pub is_mobile: bool,
+    /// The network the page's connect server serves, when the link says
+    /// so (`network=liquid` / `liquid-testnet`). A wallet on another
+    /// network is connected to another server and can never reach the
+    /// request this link names; without this it learns of the mismatch
+    /// only from its own server's refusal, and the page never learns at
+    /// all. Older links carry nothing: `None` means unknown, never "same
+    /// as me".
+    pub network: Option<crate::key::Network>,
 }
 
 pub fn parse_app_link(url: &str) -> Result<AppLink, anyhow::Error> {
@@ -66,6 +74,8 @@ pub fn parse_app_link(url: &str) -> Result<AppLink, anyhow::Error> {
         .ok_or_else(|| anyhow!("invalid link: no request_id query parameter"))?
         .clone();
 
+    let network = parse_network_param(&params)?;
+
     let link_type = match (url.scheme(), domain.as_str(), url.path()) {
         ("https", "app.sideswap.io", "/login/") | ("liquidconnect", "login", "/") => {
             LinkType::Login
@@ -79,6 +89,23 @@ pub fn parse_app_link(url: &str) -> Result<AppLink, anyhow::Error> {
         link_type,
         request_id,
         is_mobile,
+        network,
+    })
+}
+
+/// The optional `network=` query parameter, one reading for every link
+/// form. Named values only; an unknown value is an error rather than a
+/// silent "no opinion", because the point is to stop a wallet acting
+/// where it cannot settle.
+fn parse_network_param(
+    params: &BTreeMap<String, String>,
+) -> Result<Option<crate::key::Network>, anyhow::Error> {
+    Ok(match params.get("network").map(String::as_str) {
+        None => None,
+        Some("liquid") | Some("mainnet") => Some(crate::key::Network::Liquid),
+        Some("liquid-testnet") | Some("testnet") => Some(crate::key::Network::LiquidTestnet),
+        Some("liquid-regtest") | Some("regtest") => Some(crate::key::Network::Regtest),
+        Some(other) => bail!("unknown network in link: {other}"),
     })
 }
 
@@ -145,13 +172,7 @@ pub fn parse_venue_login_link(url: &str) -> Result<VenueLoginLink, anyhow::Error
     // Optional and named, never positional: an unknown value is an error
     // rather than a silent "no opinion", because the whole point is to
     // stop a wallet acting on a venue it cannot settle with.
-    let network = match params.get("network").map(String::as_str) {
-        None => None,
-        Some("liquid") | Some("mainnet") => Some(crate::key::Network::Liquid),
-        Some("liquid-testnet") | Some("testnet") => Some(crate::key::Network::LiquidTestnet),
-        Some("liquid-regtest") | Some("regtest") => Some(crate::key::Network::Regtest),
-        Some(other) => bail!("unknown network in venue link: {other}"),
-    };
+    let network = parse_network_param(&params)?;
 
     Ok(VenueLoginLink {
         venue,
@@ -174,6 +195,25 @@ mod tests {
     }
 
     use super::*;
+
+    /// A login link may name the network its site is on; a wallet on
+    /// another network refuses it locally and tells the site's server
+    /// (see the host). A link that says nothing is unknown, not "mine".
+    #[test]
+    fn login_links_carry_the_site_network_when_they_say_so() {
+        let bare = parse_app_link("liquidconnect://login/?request_id=abc").unwrap();
+        assert_eq!(bare.network, None);
+        let testnet = parse_app_link(
+            "liquidconnect://login/?request_id=abc&network=liquid-testnet&mobile=true",
+        )
+        .unwrap();
+        assert_eq!(testnet.network, Some(crate::key::Network::LiquidTestnet));
+        assert!(testnet.is_mobile);
+        let mainnet =
+            parse_app_link("https://app.sideswap.io/login/?request_id=abc&network=liquid").unwrap();
+        assert_eq!(mainnet.network, Some(crate::key::Network::Liquid));
+        assert!(parse_app_link("liquidconnect://login/?request_id=abc&network=bitcoin").is_err());
+    }
 
     /// The venue-login form parses, and everything that could steer the
     /// host's constructed URL is refused.

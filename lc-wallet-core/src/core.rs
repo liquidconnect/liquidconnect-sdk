@@ -976,6 +976,11 @@ impl WalletConnectCore {
                         link_type,
                         request_id,
                         is_mobile,
+                        // The host checks a link's network against the
+                        // wallet's own BEFORE the core sees it: a mismatch
+                        // is answered locally and declined over HTTP,
+                        // never sent down this session.
+                        network: _,
                     },
             } => {
                 if is_mobile {
