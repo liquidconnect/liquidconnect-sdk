@@ -1010,15 +1010,18 @@ pub const SWAPTION_LENDING_V3_LEAF: [u8; 32] = hex_literal::hex!("880d441e2d8543
 /// v3 plus the venue's last look before expiry.
 pub const SWAPTION_LENDING_V4_LEAF: [u8; 32] = hex_literal::hex!("939c233fc8ebbd59cce2ec10ef7bbf681dd933fa6431e4d58dc013b728d9ef1a");
 
-/// Tapleaf hash of the constant v5 lending program (`swaption_lending_v5.simf`):
+/// Tapleaf hash of the constant v5 lending program (`swaption_lending_v5.simf`,
+/// source and regtest suite: https://github.com/sideswap-io/swaption-covenants):
 /// v4 plus a PARTIAL last look (the venue may take a position off in rounds).
 pub const SWAPTION_LENDING_V5_LEAF: [u8; 32] = hex_literal::hex!("da43157b075c4c18c1f7354ada37455fdfbd7eb481d6762a9f1843896d659725");
 
-/// Tapleaf hash of the constant claim program (`swaption_claim.simf`): a
+/// Tapleaf hash of the constant claim program (`swaption_claim.simf` in
+/// https://github.com/sideswap-io/swaption-covenants): a
 /// coin spendable by whoever spends one unit of the lender token as input 0.
 pub const SWAPTION_CLAIM_LEAF: [u8; 32] = hex_literal::hex!("51f916310d382610bf7efd7b345d9641b3dc93917d2afb77289add911f3403e1");
 
-/// Tapleaf hash of the constant offer program (`swaption_offer.simf`): a
+/// Tapleaf hash of the constant offer program (`swaption_offer.simf` in
+/// https://github.com/sideswap-io/swaption-covenants): a
 /// lender's cash escrowed at post time, fillable by any borrower alone;
 /// slot 0 the terms digest, slot 1 the remaining cash (the position tree).
 pub const SWAPTION_OFFER_LEAF: [u8; 32] = hex_literal::hex!("881b1416b04e9fb47b6ecde9701880470713c37b5b99388da973d4e0d508f41f");
