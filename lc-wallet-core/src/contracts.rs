@@ -44,8 +44,8 @@ use crate::approval::{OwnedInput, decode_pset};
 use crate::key::Network;
 use crate::lending::{
     FILL_BORROWER_NFT_OUTPUT, FILL_LENDER_NFT_OUTPUT, FILL_POSITION_OUTPUT, OfferRowClaim, SWAPTION_CLAIM_LEAF,
-    SWAPTION_LENDING_V5_LEAF, SWAPTION_OFFER_LEAF, TypedFund, claim_script, fmt8, offer_script, offer_terms_digest,
-    op_return_payload, v5_position_script, v5_terms_digest,
+    SWAPTION_LENDING_V4_LEAF, SWAPTION_LENDING_V5_LEAF, SWAPTION_OFFER_LEAF, TypedFund, claim_script, fmt8, offer_script,
+    offer_terms_digest, op_return_payload, v4_position_script, v4_terms_digest, v5_position_script, v5_terms_digest,
 };
 
 /// The feature a wallet advertises in `LoginReq.features` once it holds
@@ -55,8 +55,34 @@ pub const CONTRACTS_FEATURE: &str = "contracts/1";
 /// Kind names: the typed-kind vocabulary the SDK already speaks.
 pub mod kind {
     pub const LEND_POSITION_V5: &str = "sw/lend/position/v5";
+    /// The v4 covenant (all-or-nothing last look): what a venue whose
+    /// `dealer.covenant_version` is 4 still creates.
+    pub const LEND_POSITION_V4: &str = "sw/lend/position/v4";
     pub const LEND_OFFER_V1: &str = "sw/lend/offer/v1";
     pub const LEND_CLAIM_V1: &str = "sw/lend/claim/v1";
+}
+
+/// A position's terms: exactly the covenant's witness terms in digest
+/// order, shared by the v4 and v5 kinds (v5 adds only the partial last
+/// look inside the program; the terms are the same).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PositionTerms {
+    pub collateral: AssetId,
+    pub cash: AssetId,
+    pub size: u64,
+    pub buyback: u64,
+    pub expiry: u32,
+    pub borrower_nft: AssetId,
+    pub lender_nft: AssetId,
+    /// SHA-256 of the lender payout scriptPubKey (the claim script of
+    /// `lender_nft` since v3).
+    pub payout: [u8; 32],
+    /// SHA-256 of the borrower's payout scriptPubKey (the script its
+    /// position token was paid to).
+    pub borrower_payout: [u8; 32],
+    /// SHA-256 of the venue's last-look scriptPubKey.
+    pub lastlook: [u8; 32],
+    pub lastlook_height: u32,
 }
 
 fn tagged(tag: &[u8], parts: &[&[u8]]) -> [u8; 32] {
@@ -87,24 +113,10 @@ pub enum ContractParams {
     /// `sw/lend/position/v5`: exactly `PositionParametersV5::witness_terms`
     /// in digest order.
     #[serde(rename = "sw/lend/position/v5")]
-    LendPositionV5 {
-        collateral: AssetId,
-        cash: AssetId,
-        size: u64,
-        buyback: u64,
-        expiry: u32,
-        borrower_nft: AssetId,
-        lender_nft: AssetId,
-        /// SHA-256 of the lender payout scriptPubKey (the claim script of
-        /// `lender_nft` since v3).
-        payout: [u8; 32],
-        /// SHA-256 of the borrower's payout scriptPubKey (the script its
-        /// position token was paid to).
-        borrower_payout: [u8; 32],
-        /// SHA-256 of the venue's last-look scriptPubKey.
-        lastlook: [u8; 32],
-        lastlook_height: u32,
-    },
+    LendPositionV5(PositionTerms),
+    /// `sw/lend/position/v4`: the same terms under the v4 program leaf.
+    #[serde(rename = "sw/lend/position/v4")]
+    LendPositionV4(PositionTerms),
     /// `sw/lend/offer/v1`: `OfferParameters`.
     #[serde(rename = "sw/lend/offer/v1")]
     LendOfferV1 {
@@ -126,7 +138,8 @@ pub enum ContractParams {
 impl ContractParams {
     pub fn kind(&self) -> &'static str {
         match self {
-            ContractParams::LendPositionV5 { .. } => kind::LEND_POSITION_V5,
+            ContractParams::LendPositionV5(_) => kind::LEND_POSITION_V5,
+            ContractParams::LendPositionV4(_) => kind::LEND_POSITION_V4,
             ContractParams::LendOfferV1 { .. } => kind::LEND_OFFER_V1,
             ContractParams::LendClaimV1 { .. } => kind::LEND_CLAIM_V1,
         }
@@ -135,9 +148,18 @@ impl ContractParams {
     /// The tapleaf hash the SDK pins for this kind: the allowlist.
     pub fn leaf(&self) -> [u8; 32] {
         match self {
-            ContractParams::LendPositionV5 { .. } => SWAPTION_LENDING_V5_LEAF,
+            ContractParams::LendPositionV5(_) => SWAPTION_LENDING_V5_LEAF,
+            ContractParams::LendPositionV4(_) => SWAPTION_LENDING_V4_LEAF,
             ContractParams::LendOfferV1 { .. } => SWAPTION_OFFER_LEAF,
             ContractParams::LendClaimV1 { .. } => SWAPTION_CLAIM_LEAF,
+        }
+    }
+
+    /// The terms of a position kind, if this is one.
+    pub fn position(&self) -> Option<&PositionTerms> {
+        match self {
+            ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t) => Some(t),
+            _ => None,
         }
     }
 
@@ -150,30 +172,18 @@ impl ContractParams {
         let a = |v: &AssetId| serde_json::Value::String(v.to_string());
         let x = |v: &[u8; 32]| serde_json::Value::String(hex32(v));
         match self {
-            ContractParams::LendPositionV5 {
-                collateral,
-                cash,
-                size,
-                buyback,
-                expiry,
-                borrower_nft,
-                lender_nft,
-                payout,
-                borrower_payout,
-                lastlook,
-                lastlook_height,
-            } => {
-                m.insert("collateral", a(collateral));
-                m.insert("cash", a(cash));
-                m.insert("size", s(*size));
-                m.insert("buyback", s(*buyback));
-                m.insert("expiry", h(*expiry));
-                m.insert("borrower_nft", a(borrower_nft));
-                m.insert("lender_nft", a(lender_nft));
-                m.insert("payout", x(payout));
-                m.insert("borrower_payout", x(borrower_payout));
-                m.insert("lastlook", x(lastlook));
-                m.insert("lastlook_height", h(*lastlook_height));
+            ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t) => {
+                m.insert("collateral", a(&t.collateral));
+                m.insert("cash", a(&t.cash));
+                m.insert("size", s(t.size));
+                m.insert("buyback", s(t.buyback));
+                m.insert("expiry", h(t.expiry));
+                m.insert("borrower_nft", a(&t.borrower_nft));
+                m.insert("lender_nft", a(&t.lender_nft));
+                m.insert("payout", x(&t.payout));
+                m.insert("borrower_payout", x(&t.borrower_payout));
+                m.insert("lastlook", x(&t.lastlook));
+                m.insert("lastlook_height", h(t.lastlook_height));
             }
             ContractParams::LendOfferV1 {
                 cash,
@@ -225,34 +235,39 @@ impl ContractParams {
     /// `None` for a claim script).
     pub fn script(&self, state: Option<u64>) -> anyhow::Result<Script> {
         match self {
-            ContractParams::LendPositionV5 {
-                collateral,
-                cash,
-                size,
-                buyback,
-                expiry,
-                borrower_nft,
-                lender_nft,
-                payout,
-                borrower_payout,
-                lastlook,
-                lastlook_height,
-            } => {
+            ContractParams::LendPositionV5(t) => {
                 let debt = state.ok_or_else(|| anyhow::anyhow!("a position needs its remaining debt"))?;
                 let digest = v5_terms_digest(
-                    *collateral,
-                    *cash,
-                    *size,
-                    *buyback,
-                    *expiry,
-                    *borrower_nft,
-                    *lender_nft,
-                    payout,
-                    borrower_payout,
-                    lastlook,
-                    *lastlook_height,
+                    t.collateral,
+                    t.cash,
+                    t.size,
+                    t.buyback,
+                    t.expiry,
+                    t.borrower_nft,
+                    t.lender_nft,
+                    &t.payout,
+                    &t.borrower_payout,
+                    &t.lastlook,
+                    t.lastlook_height,
                 );
                 Ok(v5_position_script(&digest, debt))
+            }
+            ContractParams::LendPositionV4(t) => {
+                let debt = state.ok_or_else(|| anyhow::anyhow!("a position needs its remaining debt"))?;
+                let digest = v4_terms_digest(
+                    t.collateral,
+                    t.cash,
+                    t.size,
+                    t.buyback,
+                    t.expiry,
+                    t.borrower_nft,
+                    t.lender_nft,
+                    &t.payout,
+                    &t.borrower_payout,
+                    &t.lastlook,
+                    t.lastlook_height,
+                );
+                Ok(v4_position_script(&digest, debt))
             }
             ContractParams::LendOfferV1 {
                 cash,
@@ -278,7 +293,7 @@ impl ContractParams {
     /// none.
     pub fn cutoff(&self) -> Option<u32> {
         match self {
-            ContractParams::LendPositionV5 { expiry, .. } => Some(*expiry),
+            ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t) => Some(t.expiry),
             ContractParams::LendOfferV1 { cutoff, .. } => Some(*cutoff),
             ContractParams::LendClaimV1 { .. } => None,
         }
@@ -287,7 +302,7 @@ impl ContractParams {
     /// The lender token a lender-side record hangs on, if any.
     pub fn lender_token(&self) -> Option<AssetId> {
         match self {
-            ContractParams::LendPositionV5 { lender_nft, .. } => Some(*lender_nft),
+            ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t) => Some(t.lender_nft),
             ContractParams::LendOfferV1 { lender_token, .. } => Some(*lender_token),
             ContractParams::LendClaimV1 { lender_token } => Some(*lender_token),
         }
@@ -440,7 +455,7 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
 
     let mut out = Vec::new();
     match ctx.claim {
-        TypedFund::FillV5 { .. } | TypedFund::FillV6 { .. } => {
+        TypedFund::FillV4 { .. } | TypedFund::FillV5 { .. } | TypedFund::FillV6 { .. } => {
             let params = fill_params_of(ctx.claim, &pset, ctx.policy_asset)?.expect("a fill claim has a position");
             out.push(new_position(params, txid, ctx.domain));
         }
@@ -584,8 +599,8 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
                 status: None,
             });
         }
-        // Positions of covenant versions 1–4 have no contract kind.
-        TypedFund::Fill { .. } | TypedFund::FillV2 { .. } | TypedFund::FillV3 { .. } | TypedFund::FillV4 { .. } => {}
+        // Positions of covenant versions 1–3 have no contract kind.
+        TypedFund::Fill { .. } | TypedFund::FillV2 { .. } | TypedFund::FillV3 { .. } => {}
     }
     Ok(out)
 }
@@ -601,7 +616,23 @@ pub fn fill_params(claim: &TypedFund, template_b64: &str, policy_asset: AssetId)
 }
 
 fn fill_params_of(claim: &TypedFund, pset: &elements::pset::PartiallySignedTransaction, policy_asset: AssetId) -> anyhow::Result<Option<ContractParams>> {
-    let (size, buyback, expiry, cash, collateral, payout, lastlook, lastlook_height, lender_nft) = match claim {
+    let lender_from_output2 = || -> anyhow::Result<AssetId> {
+        let (lender_nft, one, _) = explicit_output(pset, FILL_LENDER_NFT_OUTPUT)?;
+        anyhow::ensure!(one == 1, "fill output 2 is not the lender token");
+        Ok(lender_nft)
+    };
+    let (version, size, buyback, expiry, cash, collateral, payout, lastlook, lastlook_height, lender_nft) = match claim {
+        TypedFund::FillV4 {
+            size,
+            buyback,
+            expiry,
+            cash,
+            collateral,
+            payout,
+            lastlook,
+            lastlook_height,
+            ..
+        } => (4u8, *size, *buyback, *expiry, *cash, *collateral, payout, lastlook, *lastlook_height, lender_from_output2()?),
         TypedFund::FillV5 {
             size,
             buyback,
@@ -612,11 +643,7 @@ fn fill_params_of(claim: &TypedFund, pset: &elements::pset::PartiallySignedTrans
             lastlook,
             lastlook_height,
             ..
-        } => {
-            let (lender_nft, one, _) = explicit_output(pset, FILL_LENDER_NFT_OUTPUT)?;
-            anyhow::ensure!(one == 1, "fill output 2 is not the lender token");
-            (*size, *buyback, *expiry, *cash, *collateral, payout, lastlook, *lastlook_height, lender_nft)
-        }
+        } => (5u8, *size, *buyback, *expiry, *cash, *collateral, payout, lastlook, *lastlook_height, lender_from_output2()?),
         TypedFund::FillV6 {
             size,
             buyback,
@@ -628,7 +655,7 @@ fn fill_params_of(claim: &TypedFund, pset: &elements::pset::PartiallySignedTrans
             lastlook_height,
             lender_nft,
             ..
-        } => (*size, *buyback, *expiry, *cash, *collateral, payout, lastlook, *lastlook_height, *lender_nft),
+        } => (5u8, *size, *buyback, *expiry, *cash, *collateral, payout, lastlook, *lastlook_height, *lender_nft),
         _ => return Ok(None),
     };
     let collateral = collateral.unwrap_or(policy_asset);
@@ -636,7 +663,7 @@ fn fill_params_of(claim: &TypedFund, pset: &elements::pset::PartiallySignedTrans
     anyhow::ensure!(asset0 == collateral && value0 == size, "fill output 0 is not the position coin");
     let (borrower_nft, one, borrower_script) = explicit_output(pset, FILL_BORROWER_NFT_OUTPUT)?;
     anyhow::ensure!(one == 1, "fill output 1 is not the borrower token");
-    let params = ContractParams::LendPositionV5 {
+    let terms = PositionTerms {
         collateral,
         cash,
         size,
@@ -649,14 +676,19 @@ fn fill_params_of(claim: &TypedFund, pset: &elements::pset::PartiallySignedTrans
         lastlook: *lastlook,
         lastlook_height,
     };
+    let params = if version == 4 {
+        ContractParams::LendPositionV4(terms)
+    } else {
+        ContractParams::LendPositionV5(terms)
+    };
     anyhow::ensure!(params.script(Some(buyback))? == script0, "fill output 0 is not the covenant for these terms");
     Ok(Some(params))
 }
 
 fn new_position(params: ContractParams, txid: Txid, domain: &str) -> Derived {
-    let (collateral, size, buyback) = match &params {
-        ContractParams::LendPositionV5 { collateral, size, buyback, .. } => (*collateral, *size, *buyback),
-        _ => unreachable!("fill_params_of returns a position"),
+    let (collateral, size, buyback) = match params.position() {
+        Some(t) => (t.collateral, t.size, t.buyback),
+        None => unreachable!("fill_params_of returns a position"),
     };
     Derived::New(ContractRecord {
         contract_id: params.contract_id(),
@@ -719,8 +751,8 @@ impl ContractStore {
 
     fn matches(record: &ContractRecord, select: &Select) -> bool {
         match (select, &record.params) {
-            (Select::PositionByBorrowerNft(nft), ContractParams::LendPositionV5 { borrower_nft, .. }) => {
-                borrower_nft == nft && record.role == Role::Borrower
+            (Select::PositionByBorrowerNft(nft), ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t)) => {
+                t.borrower_nft == *nft && record.role == Role::Borrower
             }
             (Select::OfferByCoin(outpoint), ContractParams::LendOfferV1 { .. }) => record.coins.iter().any(|c| c.outpoint == *outpoint),
             (Select::ClaimByToken(token), ContractParams::LendClaimV1 { lender_token }) => lender_token == token,
@@ -822,8 +854,10 @@ impl ContractStore {
 /// The note's length: one tag byte and a 78-byte body, under Elements'
 /// 80-byte OP_RETURN relay limit.
 pub const NOTE_LEN: usize = 79;
-/// Tag of a `sw/lend/position/v5` note — the only kind with a note.
+/// Tag of a `sw/lend/position/v5` note.
 pub const NOTE_TAG_POSITION_V5: u8 = 0x01;
+/// Tag of a `sw/lend/position/v4` note: the same body under the v4 leaf.
+pub const NOTE_TAG_POSITION_V4: u8 = 0x02;
 
 /// BIP43 purpose index of the note key's derivation path: 0x4C4E, ASCII
 /// "LN". The full path is `m/19534'/<network>'/0'` with network 0'
@@ -910,24 +944,18 @@ fn from_u24(b: &[u8]) -> u32 {
 ///     tag (1) ‖ buyback u64 BE (8) ‖ expiry u24 BE (3) ‖ lastlook_height u24 BE (3)
 ///     ‖ lastlook (32) ‖ lender_nft (32)
 pub fn position_note(params: &ContractParams) -> anyhow::Result<[u8; NOTE_LEN]> {
-    let ContractParams::LendPositionV5 {
-        buyback,
-        expiry,
-        lastlook_height,
-        lastlook,
-        lender_nft,
-        ..
-    } = params
-    else {
-        anyhow::bail!("only a position has a note");
+    let (tag, t) = match params {
+        ContractParams::LendPositionV5(t) => (NOTE_TAG_POSITION_V5, t),
+        ContractParams::LendPositionV4(t) => (NOTE_TAG_POSITION_V4, t),
+        _ => anyhow::bail!("only a position has a note"),
     };
     let mut note = [0u8; NOTE_LEN];
-    note[0] = NOTE_TAG_POSITION_V5;
-    note[1..9].copy_from_slice(&buyback.to_be_bytes());
-    note[9..12].copy_from_slice(&u24(*expiry)?);
-    note[12..15].copy_from_slice(&u24(*lastlook_height)?);
-    note[15..47].copy_from_slice(lastlook);
-    note[47..79].copy_from_slice(&lender_nft.into_inner().0);
+    note[0] = tag;
+    note[1..9].copy_from_slice(&t.buyback.to_be_bytes());
+    note[9..12].copy_from_slice(&u24(t.expiry)?);
+    note[12..15].copy_from_slice(&u24(t.lastlook_height)?);
+    note[15..47].copy_from_slice(&t.lastlook);
+    note[47..79].copy_from_slice(&t.lender_nft.into_inner().0);
     Ok(note)
 }
 
@@ -958,7 +986,7 @@ pub fn note_script(sealed: &[u8; NOTE_LEN]) -> Script {
 /// `input0` is the template's input 0 (the dealer's cash coin or the offer
 /// coin), which the funded transaction keeps at index 0.
 pub fn note_for_fill(key: &NoteKey, params: &ContractParams, input0: &OutPoint) -> anyhow::Result<Option<[u8; NOTE_LEN]>> {
-    if !matches!(params, ContractParams::LendPositionV5 { .. }) {
+    if params.position().is_none() {
         return Ok(None);
     }
     Ok(Some(seal_note(key, input0, &position_note(params)?)))
@@ -998,7 +1026,8 @@ pub fn recover_fill(key: &NoteKey, tx: &elements::Transaction, cash: AssetId) ->
     let mut sealed_arr = [0u8; NOTE_LEN];
     sealed_arr.copy_from_slice(sealed);
     let note = seal_note(key, &input0, &sealed_arr);
-    if note[0] != NOTE_TAG_POSITION_V5 {
+    let tag = note[0];
+    if tag != NOTE_TAG_POSITION_V5 && tag != NOTE_TAG_POSITION_V4 {
         return None;
     }
     let buyback = u64::from_be_bytes(note[1..9].try_into().ok()?);
@@ -1019,7 +1048,7 @@ pub fn recover_fill(key: &NoteKey, tx: &elements::Transaction, cash: AssetId) ->
         _ => return None,
     };
     let payout = script_hash(&claim_script(lender_nft));
-    let params = ContractParams::LendPositionV5 {
+    let terms = PositionTerms {
         collateral,
         cash,
         size,
@@ -1031,6 +1060,11 @@ pub fn recover_fill(key: &NoteKey, tx: &elements::Transaction, cash: AssetId) ->
         borrower_payout: script_hash(&out1.script_pubkey),
         lastlook,
         lastlook_height,
+    };
+    let params = if tag == NOTE_TAG_POSITION_V4 {
+        ContractParams::LendPositionV4(terms)
+    } else {
+        ContractParams::LendPositionV5(terms)
     };
     if params.script(Some(buyback)).ok()? != out0.script_pubkey {
         return None;
@@ -1075,43 +1109,31 @@ impl ContractRecord {
     pub fn render(&self, collateral_symbol: &str, cash_symbol: &str) -> String {
         let status = self.status.render();
         match (&self.params, self.role) {
-            (
-                ContractParams::LendPositionV5 {
-                    size,
-                    buyback,
-                    expiry,
-                    lastlook_height,
-                    ..
-                },
-                Role::Borrower,
-            ) => {
-                let owed = self.state.unwrap_or(*buyback);
-                let owed_text = if owed == *buyback {
-                    format!("buy back for {} {cash_symbol}", fmt8(*buyback))
+            (ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t), Role::Borrower) => {
+                let owed = self.state.unwrap_or(t.buyback);
+                let owed_text = if owed == t.buyback {
+                    format!("buy back for {} {cash_symbol}", fmt8(t.buyback))
                 } else {
                     format!("{} {cash_symbol} still owed", fmt8(owed))
                 };
-                let last_look = if *lastlook_height > 0 {
-                    format!(" · from block {lastlook_height} the venue may exercise for you")
+                let last_look = if t.lastlook_height > 0 {
+                    format!(" · from block {} the venue may exercise for you", t.lastlook_height)
                 } else {
                     String::new()
                 };
                 format!(
                     "Sold {} {collateral_symbol} · {owed_text} until block {expiry}{last_look} · from block {expiry} the collateral goes to the lender · {status}",
-                    fmt8(*size)
+                    fmt8(t.size),
+                    expiry = t.expiry
                 )
             }
-            (
-                ContractParams::LendPositionV5 {
-                    size, buyback, expiry, ..
-                },
-                Role::Lender,
-            ) => {
-                let owed = self.state.unwrap_or(*buyback);
+            (ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t), Role::Lender) => {
+                let owed = self.state.unwrap_or(t.buyback);
                 format!(
                     "Bought {} {collateral_symbol} · the borrower may buy it back for {} {cash_symbol} until block {expiry} · from block {expiry} the collateral is yours · {status}",
-                    fmt8(*size),
-                    fmt8(owed)
+                    fmt8(t.size),
+                    fmt8(owed),
+                    expiry = t.expiry
                 )
             }
             (ContractParams::LendOfferV1 { rows, cutoff, .. }, _) => {
@@ -1245,8 +1267,8 @@ mod tests {
         tx
     }
 
-    fn position_params(payout: &[u8; 32], lastlook: &[u8; 32]) -> ContractParams {
-        ContractParams::LendPositionV5 {
+    fn position_terms(payout: &[u8; 32], lastlook: &[u8; 32]) -> PositionTerms {
+        PositionTerms {
             collateral: asset(LBTC),
             cash: asset(USDT),
             size: 2_000_000,
@@ -1261,6 +1283,99 @@ mod tests {
         }
     }
 
+    fn position_params(payout: &[u8; 32], lastlook: &[u8; 32]) -> ContractParams {
+        ContractParams::LendPositionV5(position_terms(payout, lastlook))
+    }
+
+    /// A funded v4 fill as a desk fills it on the paper server today:
+    /// the same rows as v6, but the lender token at output 2 and the v4
+    /// program at output 0.
+    fn funded_v4_fill(payout: &[u8; 32], lastlook: &[u8; 32], note: Option<[u8; NOTE_LEN]>) -> pset::PartiallySignedTransaction {
+        let borrower_hash = script_hash(&spk(0x01));
+        let digest = v4_terms_digest(
+            asset(LBTC),
+            asset(USDT),
+            2_000_000,
+            1_242_00000000,
+            2_600_984,
+            asset(NFT),
+            asset(LENDER_TOKEN),
+            payout,
+            &borrower_hash,
+            lastlook,
+            2_600_484,
+        );
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        tx.add_input(input(0x31, 0, txout(USDT, 1_500_00000000, spk(0xaa)))); // 0 the desk's cash
+        tx.add_input(input(0x32, 0, txout(LBTC, 100_000, spk(0xab)))); // 1 venue fee coin
+        tx.add_input(input(0x33, 1, txout(LBTC, 2_500_000, spk(0x01)))); // 2 the wallet's collateral
+        tx.add_output(pset::Output::from_txout(txout(LBTC, 2_000_000, v4_position_script(&digest, 1_242_00000000)))); // 0 position
+        tx.add_output(pset::Output::from_txout(txout(NFT, 1, spk(0x01)))); // 1 borrower token → mine
+        tx.add_output(pset::Output::from_txout(txout(LENDER_TOKEN, 1, spk(0xaa)))); // 2 lender token → desk
+        tx.add_output(pset::Output::from_txout(txout(USDT, 1_197_00000000, spk(0x01)))); // 3 proceeds → mine
+        tx.add_output(pset::Output::from_txout(txout(USDT, 3_00000000, spk(0xfe)))); // 4 venue fee
+        tx.add_output(pset::Output::from_txout(txout(USDT, 300_00000000, spk(0xaa)))); // 5 desk change
+        tx.add_output(pset::Output::from_txout(txout(LBTC, 100_000 - 450, spk(0xab)))); // 6 venue change
+        tx.add_output(pset::Output::from_txout(txout(LBTC, 450, Script::new()))); // 7 fee
+        tx.add_output(pset::Output::from_txout(txout(LBTC, 500_000, spk(0x01)))); // 8 the wallet's change
+        if let Some(note) = note {
+            let mut o = pset::Output::from_txout(txout(LBTC, 0, note_script(&note)));
+            o.amount = Some(0);
+            tx.add_output(o); // 9 the note
+        }
+        tx
+    }
+
+    #[test]
+    fn a_v4_fill_yields_a_v4_position_whose_note_recovers_under_its_own_leaf() {
+        let lastlook = [11u8; 32];
+        let payout = payout_of(LENDER_TOKEN);
+        let claim = TypedFund::FillV4 {
+            size: 2_000_000,
+            sale: 1_200_00000000,
+            buyback: 1_242_00000000,
+            expiry: 2_600_984,
+            cash: asset(USDT),
+            collateral: Some(asset(LBTC)),
+            fee: 3_00000000,
+            payout,
+            lastlook,
+            lastlook_height: 2_600_484,
+        };
+        let template = funded_v4_fill(&payout, &lastlook, None);
+        let params = fill_params(&claim, &b64(&template), asset(LBTC)).unwrap().unwrap();
+        assert_eq!(params, ContractParams::LendPositionV4(position_terms(&payout, &lastlook)));
+        assert_eq!(params.kind(), kind::LEND_POSITION_V4);
+        assert_eq!(params.leaf(), SWAPTION_LENDING_V4_LEAF);
+        assert_ne!(params.contract_id(), position_params(&payout, &lastlook).contract_id(), "v4 and v5 ids differ by kind");
+        assert_eq!(hex::encode(params.script(Some(1_242_00000000)).unwrap().as_bytes()), hex::encode(template.outputs()[0].script_pubkey.as_bytes()));
+
+        let input0 = template_input0(&b64(&template)).unwrap();
+        let sealed = note_for_fill(&key(), &params, &input0).unwrap().unwrap();
+        assert_eq!(seal_note(&key(), &input0, &sealed)[0], NOTE_TAG_POSITION_V4);
+        let funded = funded_v4_fill(&payout, &lastlook, Some(sealed));
+        let derived = derive(&FundContext {
+            claim: &claim,
+            funded_pset_b64: &b64(&funded),
+            domain: "paper.swaption.io",
+            policy_asset: asset(LBTC),
+            mine: &[1, 3, 8],
+            owned: &[],
+        })
+        .unwrap();
+        let Derived::New(record) = &derived[0] else { panic!() };
+        assert_eq!(record.params, params);
+        assert_eq!(record.role, Role::Borrower);
+        let tx = funded.extract_tx().unwrap();
+        let (recovered, coin) = recover_fill(&key(), &tx, asset(USDT)).expect("the v4 note recovers the position");
+        assert_eq!(recovered, params);
+        assert_eq!(coin.outpoint, OutPoint::new(tx.txid(), 0));
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains(r#""kind":"sw/lend/position/v4""#), "{json}");
+        let back: ContractRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, *record);
+    }
+
     #[test]
     fn canonical_json_sorts_keys_and_the_id_binds_kind_and_params() {
         let lastlook = [11u8; 32];
@@ -1272,8 +1387,8 @@ mod tests {
         let id = p.contract_id();
         assert_eq!(id, position_params(&payout, &lastlook).contract_id());
         let mut other = position_params(&payout, &lastlook);
-        if let ContractParams::LendPositionV5 { buyback, .. } = &mut other {
-            *buyback += 1;
+        if let ContractParams::LendPositionV5(t) = &mut other {
+            t.buyback += 1;
         }
         assert_ne!(id, other.contract_id());
         let claim = ContractParams::LendClaimV1 { lender_token: asset(LENDER_TOKEN) };
