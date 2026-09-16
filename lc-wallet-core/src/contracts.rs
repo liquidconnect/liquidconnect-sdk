@@ -34,10 +34,14 @@
 
 use std::collections::BTreeMap;
 
+use elements::bitcoin::NetworkKind;
+use elements::bitcoin::bip32::{ChildNumber, Xpriv};
+use elements::bitcoin::secp256k1::Secp256k1;
 use elements::hashes::{Hash as _, HashEngine as _, sha256};
 use elements::{AssetId, OutPoint, Script, Txid};
 
 use crate::approval::{OwnedInput, decode_pset};
+use crate::key::Network;
 use crate::lending::{
     FILL_BORROWER_NFT_OUTPUT, FILL_LENDER_NFT_OUTPUT, FILL_POSITION_OUTPUT, OfferRowClaim, SWAPTION_CLAIM_LEAF,
     SWAPTION_LENDING_V5_LEAF, SWAPTION_OFFER_LEAF, TypedFund, claim_script, fmt8, offer_script, offer_terms_digest,
@@ -77,10 +81,12 @@ fn hex32(bytes: &[u8; 32]) -> String {
 /// The terms a contract of a pinned kind commits to. Immutable for the
 /// life of the contract; the mutable slot (`remaining_debt`, `remaining`)
 /// lives in [`ContractRecord::state`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind")]
 pub enum ContractParams {
     /// `sw/lend/position/v5`: exactly `PositionParametersV5::witness_terms`
     /// in digest order.
+    #[serde(rename = "sw/lend/position/v5")]
     LendPositionV5 {
         collateral: AssetId,
         cash: AssetId,
@@ -100,6 +106,7 @@ pub enum ContractParams {
         lastlook_height: u32,
     },
     /// `sw/lend/offer/v1`: `OfferParameters`.
+    #[serde(rename = "sw/lend/offer/v1")]
     LendOfferV1 {
         cash: AssetId,
         lender_token: AssetId,
@@ -112,6 +119,7 @@ pub enum ContractParams {
     },
     /// `sw/lend/claim/v1`: the claim script of a lender token, where every
     /// position, leftover and expired offer pays the lender.
+    #[serde(rename = "sw/lend/claim/v1")]
     LendClaimV1 { lender_token: AssetId },
 }
 
@@ -325,7 +333,7 @@ pub struct ContractEvent {
 }
 
 /// A contract the wallet is party to, as the host stores it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContractRecord {
     pub contract_id: [u8; 32],
     pub params: ContractParams,
@@ -432,61 +440,9 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
 
     let mut out = Vec::new();
     match ctx.claim {
-        TypedFund::FillV5 {
-            size,
-            buyback,
-            expiry,
-            cash,
-            collateral,
-            payout,
-            lastlook,
-            lastlook_height,
-            ..
-        } => {
-            let (_, _, lender_script) = explicit_output(&pset, FILL_LENDER_NFT_OUTPUT)?;
-            let _ = lender_script;
-            let (lender_nft, _, _) = explicit_output(&pset, FILL_LENDER_NFT_OUTPUT)?;
-            out.push(new_position(
-                &pset,
-                txid,
-                ctx.domain,
-                collateral.unwrap_or(ctx.policy_asset),
-                *cash,
-                *size,
-                *buyback,
-                *expiry,
-                lender_nft,
-                payout,
-                lastlook,
-                *lastlook_height,
-            )?);
-        }
-        TypedFund::FillV6 {
-            size,
-            buyback,
-            expiry,
-            cash,
-            collateral,
-            payout,
-            lastlook,
-            lastlook_height,
-            lender_nft,
-            ..
-        } => {
-            out.push(new_position(
-                &pset,
-                txid,
-                ctx.domain,
-                collateral.unwrap_or(ctx.policy_asset),
-                *cash,
-                *size,
-                *buyback,
-                *expiry,
-                *lender_nft,
-                payout,
-                lastlook,
-                *lastlook_height,
-            )?);
+        TypedFund::FillV5 { .. } | TypedFund::FillV6 { .. } => {
+            let params = fill_params_of(ctx.claim, &pset, ctx.policy_asset)?.expect("a fill claim has a position");
+            out.push(new_position(params, txid, ctx.domain));
         }
         TypedFund::Offer {
             cash,
@@ -634,21 +590,48 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
     Ok(out)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn new_position(
-    pset: &elements::pset::PartiallySignedTransaction,
-    txid: Txid,
-    domain: &str,
-    collateral: AssetId,
-    cash: AssetId,
-    size: u64,
-    buyback: u64,
-    expiry: u32,
-    lender_nft: AssetId,
-    payout: &[u8; 32],
-    lastlook: &[u8; 32],
-    lastlook_height: u32,
-) -> anyhow::Result<Derived> {
+/// The position a fill claim creates, from the template (or the funded
+/// PSET, whose first rows are the template's) — the terms from the claim,
+/// the borrower token and payout from output 1, the lender token from the
+/// memo (v6) or output 2 (v5). Output 0 must rebuild from them: a record is
+/// only ever of a coin whose script the terms recompute. `None` for a claim
+/// that creates no position.
+pub fn fill_params(claim: &TypedFund, template_b64: &str, policy_asset: AssetId) -> anyhow::Result<Option<ContractParams>> {
+    fill_params_of(claim, &decode_pset(template_b64)?, policy_asset)
+}
+
+fn fill_params_of(claim: &TypedFund, pset: &elements::pset::PartiallySignedTransaction, policy_asset: AssetId) -> anyhow::Result<Option<ContractParams>> {
+    let (size, buyback, expiry, cash, collateral, payout, lastlook, lastlook_height, lender_nft) = match claim {
+        TypedFund::FillV5 {
+            size,
+            buyback,
+            expiry,
+            cash,
+            collateral,
+            payout,
+            lastlook,
+            lastlook_height,
+            ..
+        } => {
+            let (lender_nft, one, _) = explicit_output(pset, FILL_LENDER_NFT_OUTPUT)?;
+            anyhow::ensure!(one == 1, "fill output 2 is not the lender token");
+            (*size, *buyback, *expiry, *cash, *collateral, payout, lastlook, *lastlook_height, lender_nft)
+        }
+        TypedFund::FillV6 {
+            size,
+            buyback,
+            expiry,
+            cash,
+            collateral,
+            payout,
+            lastlook,
+            lastlook_height,
+            lender_nft,
+            ..
+        } => (*size, *buyback, *expiry, *cash, *collateral, payout, lastlook, *lastlook_height, *lender_nft),
+        _ => return Ok(None),
+    };
+    let collateral = collateral.unwrap_or(policy_asset);
     let (asset0, value0, script0) = explicit_output(pset, FILL_POSITION_OUTPUT)?;
     anyhow::ensure!(asset0 == collateral && value0 == size, "fill output 0 is not the position coin");
     let (borrower_nft, one, borrower_script) = explicit_output(pset, FILL_BORROWER_NFT_OUTPUT)?;
@@ -666,10 +649,16 @@ fn new_position(
         lastlook: *lastlook,
         lastlook_height,
     };
-    // The same check the fund verifier made, on the funded transaction:
-    // a record is only ever of a coin whose script the terms rebuild.
     anyhow::ensure!(params.script(Some(buyback))? == script0, "fill output 0 is not the covenant for these terms");
-    Ok(Derived::New(ContractRecord {
+    Ok(Some(params))
+}
+
+fn new_position(params: ContractParams, txid: Txid, domain: &str) -> Derived {
+    let (collateral, size, buyback) = match &params {
+        ContractParams::LendPositionV5 { collateral, size, buyback, .. } => (*collateral, *size, *buyback),
+        _ => unreachable!("fill_params_of returns a position"),
+    };
+    Derived::New(ContractRecord {
         contract_id: params.contract_id(),
         params,
         role: Role::Borrower,
@@ -687,7 +676,142 @@ fn new_position(
             path: "fill".to_owned(),
             state_after: Some(buyback),
         }],
-    }))
+    })
+}
+
+/// The outpoint of a template's input 0: the note's nonce, which the
+/// funded transaction keeps at index 0.
+pub fn template_input0(template_b64: &str) -> anyhow::Result<OutPoint> {
+    input_outpoint(&decode_pset(template_b64)?, 0)
+}
+
+// ---------------------------------------------------------------------------
+// The store (spec §5 step 7): what the host persists and how a derivation
+// lands on it. The host owns persistence; this is the bookkeeping.
+
+/// The wallet's records, keyed for the host. Positions and claims key by
+/// their contract id, which is unique by construction (a borrower token,
+/// a lender token). An offer's terms may be reposted unchanged, so an
+/// offer keys by its id and the coin its post created.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContractStore {
+    pub records: BTreeMap<String, ContractRecord>,
+}
+
+impl ContractStore {
+    pub fn key_of(record: &ContractRecord) -> String {
+        let id = hex::encode(record.contract_id);
+        match (&record.params, record.coins.first()) {
+            (ContractParams::LendOfferV1 { .. }, Some(coin)) => format!("{id}:{}", coin.outpoint),
+            _ => id,
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&ContractRecord> {
+        self.records.get(key)
+    }
+
+    pub fn records(&self) -> impl Iterator<Item = (&String, &ContractRecord)> {
+        self.records.iter()
+    }
+
+    fn matches(record: &ContractRecord, select: &Select) -> bool {
+        match (select, &record.params) {
+            (Select::PositionByBorrowerNft(nft), ContractParams::LendPositionV5 { borrower_nft, .. }) => {
+                borrower_nft == nft && record.role == Role::Borrower
+            }
+            (Select::OfferByCoin(outpoint), ContractParams::LendOfferV1 { .. }) => record.coins.iter().any(|c| c.outpoint == *outpoint),
+            (Select::ClaimByToken(token), ContractParams::LendClaimV1 { lender_token }) => lender_token == token,
+            _ => false,
+        }
+    }
+
+    /// Apply what an accepted step derived; returns the keys of the records
+    /// that changed. A `New` of a record already held changes nothing (an
+    /// offer post repeats the claim record of the same token).
+    pub fn apply(&mut self, derived: Derived) -> Vec<String> {
+        match derived {
+            Derived::New(record) => {
+                let key = Self::key_of(&record);
+                if self.records.contains_key(&key) {
+                    return Vec::new();
+                }
+                self.records.insert(key.clone(), record);
+                vec![key]
+            }
+            Derived::Transition {
+                select,
+                txid,
+                path,
+                state,
+                coins,
+                coins_removed,
+                status,
+            } => {
+                let keys: Vec<String> = self
+                    .records
+                    .iter()
+                    .filter(|(_, r)| Self::matches(r, &select))
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for key in &keys {
+                    let r = self.records.get_mut(key).expect("listed above");
+                    if let Some(s) = state {
+                        r.state = Some(s);
+                    }
+                    if let Some(c) = &coins {
+                        r.coins = c.clone();
+                    }
+                    r.coins.retain(|c| !coins_removed.contains(&c.outpoint));
+                    if let Some(st) = &status {
+                        r.status = st.clone();
+                    }
+                    r.history.push(ContractEvent {
+                        txid,
+                        path: path.clone(),
+                        state_after: r.state,
+                    });
+                }
+                keys
+            }
+        }
+    }
+
+    /// A transaction the wallet's own history shows confirmed: every
+    /// pending record whose coin it created is active now. Returns the
+    /// keys that changed.
+    pub fn confirm_txid(&mut self, txid: &Txid) -> Vec<String> {
+        let mut changed = Vec::new();
+        for (key, r) in self.records.iter_mut() {
+            if r.status == ContractStatus::Pending && r.coins.iter().any(|c| c.outpoint.txid == *txid) {
+                r.status = ContractStatus::Active;
+                changed.push(key.clone());
+            }
+        }
+        changed
+    }
+
+    /// A record past its cutoff with its coin still unspent, as of `tip`.
+    pub fn mark_expired(&mut self, tip: u32) -> Vec<String> {
+        let mut changed = Vec::new();
+        for (key, r) in self.records.iter_mut() {
+            if r.status == ContractStatus::Active && !r.coins.is_empty() && r.params.cutoff().is_some_and(|c| c <= tip) {
+                r.status = ContractStatus::Expired;
+                changed.push(key.clone());
+            }
+        }
+        changed
+    }
+
+    pub fn set_hidden(&mut self, key: &str, hidden: bool) -> bool {
+        match self.records.get_mut(key) {
+            Some(r) => {
+                r.hidden = hidden;
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -699,13 +823,45 @@ pub const NOTE_LEN: usize = 79;
 /// Tag of a `sw/lend/position/v5` note — the only kind with a note.
 pub const NOTE_TAG_POSITION_V5: u8 = 0x01;
 
-/// The key the note is sealed under: a 32-byte secret the host derives
-/// from the SEED on a dedicated hardened path (spend tier), never from the
-/// master blinding key. It must be derivable again after a restore.
+/// BIP43 purpose index of the note key's derivation path: 0x4C4E, ASCII
+/// "LN". The full path is `m/19534'/<network>'/0'` with network 0'
+/// Liquid, 1' Liquid testnet, 2' regtest — the venue key's scheme
+/// (`venue::VENUE_KEY_PURPOSE`) under its own purpose, so the two keys
+/// never coincide.
+pub const NOTE_KEY_PURPOSE: u32 = 0x4C4E;
+
+/// The key the note is sealed under: a 32-byte secret derived from the
+/// SEED on a dedicated hardened path (spend tier), never from the master
+/// blinding key, which travels inside the descriptor to the connect server
+/// and to any watch-only service. Derivable again after a restore.
 #[derive(Clone)]
 pub struct NoteKey([u8; 32]);
 
 impl NoteKey {
+    /// The production derivation: BIP32 from the wallet seed (the BIP39
+    /// seed bytes), hardened path `m/19534'/<network>'/0'`.
+    pub fn from_seed(seed: &[u8], network: Network) -> anyhow::Result<NoteKey> {
+        let secp = Secp256k1::signing_only();
+        // NetworkKind only selects xprv serialization bytes, which never
+        // leave this function; network separation is the path's job.
+        let master = Xpriv::new_master(NetworkKind::Main, seed)?;
+        let net = match network {
+            Network::Liquid => 0,
+            Network::LiquidTestnet => 1,
+            Network::Regtest => 2,
+        };
+        let path = [
+            ChildNumber::from_hardened_idx(NOTE_KEY_PURPOSE).expect("fits 31 bits"),
+            ChildNumber::from_hardened_idx(net).expect("fits 31 bits"),
+            ChildNumber::from_hardened_idx(0).expect("fits 31 bits"),
+        ];
+        let child = master.derive_priv(&secp, &path)?;
+        Ok(NoteKey(child.private_key.secret_bytes()))
+    }
+
+    /// A key from a secret the host derived itself (tests, hosts with
+    /// their own derivation scheme). The secret must be spend-tier and
+    /// derivable again after a restore.
     pub fn from_secret(secret: [u8; 32]) -> NoteKey {
         NoteKey(secret)
     }
@@ -804,6 +960,21 @@ pub fn note_for_fill(key: &NoteKey, params: &ContractParams, input0: &OutPoint) 
         return Ok(None);
     }
     Ok(Some(seal_note(key, input0, &position_note(params)?)))
+}
+
+/// The note as a PSET output the host appends to the template before it
+/// funds: explicit, value 0 in the policy asset, the OP_RETURN script.
+pub fn note_output(sealed: &[u8; NOTE_LEN], policy_asset: AssetId) -> elements::pset::Output {
+    use elements::confidential::{Asset, Nonce, Value};
+    let mut out = elements::pset::Output::from_txout(elements::TxOut {
+        asset: Asset::Explicit(policy_asset),
+        value: Value::Explicit(0),
+        nonce: Nonce::Null,
+        script_pubkey: note_script(sealed),
+        witness: elements::TxOutWitness::default(),
+    });
+    out.amount = Some(0);
+    out
 }
 
 /// The position a fill of this wallet's created, recovered from the
@@ -1434,6 +1605,187 @@ mod tests {
         assert_eq!(*status, Some(ContractStatus::Closed { path: "sold".to_owned() }));
         assert_eq!(*state, None);
         assert_eq!(*coins, None);
+    }
+
+    #[test]
+    fn the_store_applies_derivations_confirmations_and_expiry() {
+        let lastlook = [11u8; 32];
+        let payout = payout_of(LENDER_TOKEN);
+        let claim = v6_claim(&payout, &lastlook);
+        let funded = funded_v6_fill(&payout, &lastlook, None);
+        let fill_txid = funded.extract_tx().unwrap().txid();
+        let ctx = FundContext {
+            claim: &claim,
+            funded_pset_b64: &b64(&funded),
+            domain: "paper.swaption.io",
+            policy_asset: asset(LBTC),
+            mine: &[1, 4, 7],
+            owned: &[],
+        };
+        let mut store = ContractStore::default();
+        let derived = derive(&ctx).unwrap();
+        let keys = store.apply(derived[0].clone());
+        assert_eq!(keys.len(), 1);
+        let key = keys[0].clone();
+        assert_eq!(key, hex::encode(position_params(&payout, &lastlook).contract_id()));
+        // The same derivation again changes nothing.
+        assert!(store.apply(derived[0].clone()).is_empty());
+        assert_eq!(store.get(&key).unwrap().status, ContractStatus::Pending);
+        // The fill confirms in the wallet's history.
+        assert_eq!(store.confirm_txid(&fill_txid), vec![key.clone()]);
+        assert_eq!(store.get(&key).unwrap().status, ContractStatus::Active);
+        assert!(store.confirm_txid(&fill_txid).is_empty());
+
+        // A partial buyback moves the position; the record's own token names it.
+        let owned = [OwnedInput { index: 0, asset: asset(NFT), amount: 1 }];
+        let partial = TypedFund::Exercise {
+            amount: 621_00000000,
+            released: 1_000_000,
+            remaining: 621_00000000,
+            cash: asset(USDT),
+            collateral: Some(asset(LBTC)),
+        };
+        let exercise = funded_exercise(621_00000000);
+        let exercise_txid = exercise.extract_tx().unwrap().txid();
+        let derived = derive(&FundContext {
+            claim: &partial,
+            funded_pset_b64: &b64(&exercise),
+            domain: "paper.swaption.io",
+            policy_asset: asset(LBTC),
+            mine: &[0, 3, 4],
+            owned: &owned,
+        })
+        .unwrap();
+        assert_eq!(store.apply(derived[0].clone()), vec![key.clone()]);
+        let r = store.get(&key).unwrap();
+        assert_eq!(r.state, Some(621_00000000));
+        assert_eq!(r.coins, vec![ContractCoin { outpoint: OutPoint::new(exercise_txid, 1), asset: asset(LBTC), amount: 1_000_000 }]);
+        assert_eq!(r.history.len(), 2);
+        assert_eq!(r.history[1].path, "exercise");
+        assert!(r.render("BTC", "USDt").contains("621 USDt still owed"), "{}", r.render("BTC", "USDt"));
+
+        // Past its cutoff with the coin unspent: expired, awaiting the sweep.
+        assert!(store.mark_expired(2_600_983).is_empty());
+        assert_eq!(store.mark_expired(2_600_984), vec![key.clone()]);
+        assert_eq!(store.get(&key).unwrap().status, ContractStatus::Expired);
+        assert!(store.set_hidden(&key, true));
+        assert!(store.get(&key).unwrap().hidden);
+        assert!(!store.set_hidden("nope", true));
+
+        // A record survives a JSON round trip, as the host persists it.
+        let json = serde_json::to_string(&store).unwrap();
+        assert!(json.contains(r#""kind":"sw/lend/position/v5""#), "{json}");
+        let back: ContractStore = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, store);
+    }
+
+    #[test]
+    fn offer_records_key_by_their_post_coin_and_claim_records_by_their_token() {
+        let claim = ContractParams::LendClaimV1 { lender_token: asset(LENDER_TOKEN) };
+        let record = |params: ContractParams, coins: Vec<ContractCoin>| ContractRecord {
+            contract_id: params.contract_id(),
+            params,
+            role: Role::Lender,
+            domain: "paper.swaption.io".to_owned(),
+            state: None,
+            coins,
+            status: ContractStatus::Active,
+            hidden: false,
+            history: Vec::new(),
+        };
+        let mut store = ContractStore::default();
+        assert_eq!(store.apply(Derived::New(record(claim.clone(), vec![]))).len(), 1);
+        assert!(store.apply(Derived::New(record(claim.clone(), vec![]))).is_empty());
+
+        let rows = vec![OfferRowClaim {
+            collateral: asset(LBTC),
+            expiry: 3_200_000,
+            price_out: 3_00000000,
+            buyback: 4_00000000,
+            fee_per_unit: 2_000_000,
+            min_size: 1_000,
+        }];
+        let offer = ContractParams::LendOfferV1 {
+            cash: asset(USDT),
+            lender_token: asset(LENDER_TOKEN),
+            claim: payout_of(LENDER_TOKEN),
+            fee_script: [12u8; 32],
+            position_leaf: SWAPTION_LENDING_V5_LEAF,
+            fee_min: 50,
+            cutoff: 3_199_000,
+            rows,
+        };
+        let coin = |b: u8| ContractCoin {
+            outpoint: OutPoint::new(elements::Txid::from_str(&format!("{b:02x}").repeat(32)).unwrap(), 0),
+            asset: asset(USDT),
+            amount: 25_000_00000000,
+        };
+        // Two posts with the same terms are two records.
+        let k1 = store.apply(Derived::New(record(offer.clone(), vec![coin(0xa1)])));
+        let k2 = store.apply(Derived::New(record(offer.clone(), vec![coin(0xa2)])));
+        assert_eq!(k1.len(), 1);
+        assert_eq!(k2.len(), 1);
+        assert_ne!(k1, k2);
+        assert!(k1[0].starts_with(&hex::encode(offer.contract_id())));
+        // A cancel names its coin and closes that record alone.
+        let cancel_txid = elements::Txid::from_str(&"b1".repeat(32)).unwrap();
+        let changed = store.apply(Derived::Transition {
+            select: Select::OfferByCoin(coin(0xa2).outpoint),
+            txid: cancel_txid,
+            path: "cancel".to_owned(),
+            state: Some(0),
+            coins: Some(vec![]),
+            coins_removed: vec![coin(0xa2).outpoint],
+            status: Some(ContractStatus::Closed { path: "cancel".to_owned() }),
+        });
+        assert_eq!(changed, k2);
+        assert_eq!(store.get(&k1[0]).unwrap().status, ContractStatus::Active);
+        assert_eq!(store.get(&k2[0]).unwrap().status, ContractStatus::Closed { path: "cancel".to_owned() });
+        // A collection removes the claim record's coins.
+        let claim_key = hex::encode(claim.contract_id());
+        store.records.get_mut(&claim_key).unwrap().coins = vec![coin(0xc1), coin(0xc2)];
+        let changed = store.apply(Derived::Transition {
+            select: Select::ClaimByToken(asset(LENDER_TOKEN)),
+            txid: cancel_txid,
+            path: "collect".to_owned(),
+            state: None,
+            coins: None,
+            coins_removed: vec![coin(0xc1).outpoint],
+            status: None,
+        });
+        assert_eq!(changed, vec![claim_key.clone()]);
+        assert_eq!(store.get(&claim_key).unwrap().coins, vec![coin(0xc2)]);
+    }
+
+    #[test]
+    fn the_note_key_is_seed_derived_network_separated_and_not_the_venue_key() {
+        let seed = [3u8; 64];
+        let a = NoteKey::from_seed(&seed, Network::LiquidTestnet).unwrap();
+        let b = NoteKey::from_seed(&seed, Network::LiquidTestnet).unwrap();
+        let mainnet = NoteKey::from_seed(&seed, Network::Liquid).unwrap();
+        assert_eq!(a.0, b.0);
+        assert_ne!(a.0, mainnet.0);
+        // The venue key on the same seed and network is another key entirely.
+        let venue = crate::venue::VenueKey::from_seed(&seed, Network::LiquidTestnet).unwrap();
+        let note_pk = elements::secp256k1_zkp::Keypair::from_seckey_slice(elements::secp256k1_zkp::SECP256K1, &a.0)
+            .unwrap()
+            .x_only_public_key()
+            .0;
+        assert_ne!(note_pk, venue.public_key());
+        // fill_params from the template alone equals what derive records.
+        let lastlook = [11u8; 32];
+        let payout = payout_of(LENDER_TOKEN);
+        let claim = v6_claim(&payout, &lastlook);
+        let template = funded_v6_fill(&payout, &lastlook, None);
+        let params = fill_params(&claim, &b64(&template), asset(LBTC)).unwrap().unwrap();
+        assert_eq!(params, position_params(&payout, &lastlook));
+        assert_eq!(template_input0(&b64(&template)).unwrap(), OutPoint::new(elements::Txid::from_str(&"41".repeat(32)).unwrap(), 0));
+        let sealed = note_for_fill(&a, &params, &template_input0(&b64(&template)).unwrap()).unwrap().unwrap();
+        let out = note_output(&sealed, asset(LBTC));
+        assert_eq!(out.amount, Some(0));
+        assert_eq!(out.asset, Some(asset(LBTC)));
+        assert_eq!(op_return_payload(&out.script_pubkey), Some(&sealed[..]));
+        assert!(fill_params(&TypedFund::SellRight { price: 1, cash: asset(USDT), fee: 1 }, &b64(&template), asset(LBTC)).unwrap().is_none());
     }
 
     #[test]

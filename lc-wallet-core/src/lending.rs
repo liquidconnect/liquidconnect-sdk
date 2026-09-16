@@ -166,7 +166,7 @@ pub enum TypedFund {
 
 /// One quote row of an offer (`sw/lend/offer/v1`), exactly what the offer
 /// covenant commits to per row.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OfferRowClaim {
     pub collateral: elements::AssetId,
     pub expiry: u32,
