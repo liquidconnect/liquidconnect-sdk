@@ -702,7 +702,9 @@ impl ContractStore {
     pub fn key_of(record: &ContractRecord) -> String {
         let id = hex::encode(record.contract_id);
         match (&record.params, record.coins.first()) {
-            (ContractParams::LendOfferV1 { .. }, Some(coin)) => format!("{id}:{}", coin.outpoint),
+            // Plain `txid:vout` — elements' Display of an outpoint carries
+            // an `[elements]` prefix that has no place in a key.
+            (ContractParams::LendOfferV1 { .. }, Some(coin)) => format!("{id}:{}:{}", coin.outpoint.txid, coin.outpoint.vout),
             _ => id,
         }
     }
