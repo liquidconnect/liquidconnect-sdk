@@ -15,6 +15,9 @@
 //!   with reconnect, keepalive, and an event stream to render.
 //! - [`approval`] — a sign request's PSET as structure to render,
 //!   honest about what is confidential.
+//! - [`contracts`] — wallet-held covenant positions: records derived
+//!   from the wallet's own typed fund approvals, the encrypted note that
+//!   makes them recoverable from the seed, and their rendering.
 //! - [`lending`] — Swaption lending: typed `sw/lend/*` fund claims
 //!   checked against the template rows the wallet can read itself.
 //!
@@ -28,6 +31,7 @@
 //! [`sideswap-io/sideswap_rust`]: https://github.com/sideswap-io/sideswap_rust
 
 pub mod approval;
+pub mod contracts;
 pub mod core;
 pub mod identity;
 pub mod key;
