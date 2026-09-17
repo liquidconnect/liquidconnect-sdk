@@ -173,8 +173,20 @@ pub struct ChainOutput {
 }
 
 pub trait ChainView {
-    /// The output at `outpoint`; `Ok(None)` when the chain has no such output.
-    fn output(&self, outpoint: &OutPoint) -> Result<Option<ChainOutput>, ChainUnavailable>;
+    /// The output at `outpoint`, which the caller expects to pay `script`
+    /// (it rebuilt that script from the contract's terms before it asked).
+    /// `Ok(None)` when the chain has no such output.
+    ///
+    /// The script is there for backends that are indexed by script, as an
+    /// Electrum server is: one history of `script` says whether the
+    /// output exists, whether it is confirmed and what spent it, with no
+    /// guessing at what a server means when asked for a transaction it
+    /// does not know. Such a backend may answer `None` for an output that
+    /// exists but pays another script, which is then refused as
+    /// `coin_mismatch`; a backend that looks the transaction up by its id
+    /// returns the output as it is, and the mismatch is refused as
+    /// `script_mismatch`. Either way nothing unproven is stored.
+    fn output(&self, outpoint: &OutPoint, script: &elements::Script) -> Result<Option<ChainOutput>, ChainUnavailable>;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +397,7 @@ fn parse_coin(coin: &SpecCoin) -> Result<ContractCoin, Reject> {
 /// stated asset and amount. Returns whether it is confirmed.
 fn coin_on_chain(coin: &ContractCoin, script: &elements::Script, chain: &dyn ChainView) -> Result<bool, Reject> {
     let output = chain
-        .output(&coin.outpoint)
+        .output(&coin.outpoint, script)
         .map_err(|ChainUnavailable| Reject::ChainUnavailable)?
         .ok_or(Reject::CoinMismatch)?;
     if output.txout.script_pubkey != *script {
@@ -398,9 +410,18 @@ fn coin_on_chain(coin: &ContractCoin, script: &elements::Script, chain: &dyn Cha
     Ok(output.confirmed)
 }
 
-fn spender(outpoint: &OutPoint, chain: &dyn ChainView) -> Result<Option<Txid>, Reject> {
+/// What spent the coin a held record sits at, if anything did. The coin's
+/// script is the record's own terms and state, which is what the record
+/// was stored under.
+fn spender(record: &ContractRecord, chain: &dyn ChainView) -> Result<Option<Txid>, Reject> {
+    let Some(coin) = record.coins.first() else {
+        return Ok(None);
+    };
+    let Ok(script) = record.params.script(record.state) else {
+        return Ok(None);
+    };
     Ok(chain
-        .output(outpoint)
+        .output(&coin.outpoint, &script)
         .map_err(|ChainUnavailable| Reject::ChainUnavailable)?
         .and_then(|output| output.spent_by))
 }
@@ -420,20 +441,16 @@ fn held_key(store: &ContractStore, params: &ContractParams, coins: &[ContractCoi
             return Ok(Some((*key).clone()));
         }
         for (key, record) in &same_terms {
-            if let Some(old) = record.coins.first() {
-                if spender(&old.outpoint, chain)? == Some(coin.outpoint.txid) {
-                    return Ok(Some((*key).clone()));
-                }
+            if spender(record, chain)? == Some(coin.outpoint.txid) {
+                return Ok(Some((*key).clone()));
             }
         }
         return Ok(None);
     }
     // An offer reported gone names no coin: it is the one whose coin is spent.
     for (key, record) in &same_terms {
-        if let Some(old) = record.coins.first() {
-            if spender(&old.outpoint, chain)?.is_some() {
-                return Ok(Some((*key).clone()));
-            }
+        if spender(record, chain)?.is_some() {
+            return Ok(Some((*key).clone()));
         }
     }
     Ok(None)
@@ -558,10 +575,7 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
     } else {
         // A state can only move along the chain: what carries the new
         // coin, or ended the contract, spent the coin the record had.
-        let moved_by = match held.coins.first() {
-            Some(old) => spender(&old.outpoint, chain)?,
-            None => None,
-        };
+        let moved_by = spender(&held, chain)?;
         match (coins.first(), moved_by) {
             (Some(new), Some(by)) if by == new.outpoint.txid => {
                 record.history.push(ContractEvent {
@@ -636,6 +650,33 @@ pub fn register_all(store: &mut ContractStore, specs: &[ContractSpec], domain: &
             register(store, spec, domain, now, wallet, chain)
         })
         .collect()
+}
+
+/// Take in the outcome of a registration that ran against a COPY of the
+/// store.
+///
+/// [`register_all`] looks coins up on the chain, which blocks, and a host's
+/// store usually lives on a thread that must not. So a host copies its
+/// store, runs the registration elsewhere against the copy, and hands both
+/// copies back here. Every record the run added or changed is adopted,
+/// unless the live store's own copy of it moved in the meantime (the person
+/// approved a step, or hid the record, while the lookups ran): then the
+/// live record stands. The answer already given may then say a little more
+/// than was kept, which costs nothing: the statement that follows is made
+/// from the live store, never from the copy, and the relying party's next
+/// registration puts the rest right. Returns the keys adopted.
+pub fn adopt_registered(live: &mut ContractStore, before: &ContractStore, after: &ContractStore) -> Vec<String> {
+    let mut adopted = Vec::new();
+    for (key, record) in after.records() {
+        let untouched_by_the_run = before.get(key) == Some(record);
+        let moved_meanwhile = live.get(key) != before.get(key);
+        if untouched_by_the_run || moved_meanwhile {
+            continue;
+        }
+        live.records.insert(key.clone(), record.clone());
+        adopted.push(key.clone());
+    }
+    adopted
 }
 
 // ---------------------------------------------------------------------------
@@ -746,12 +787,23 @@ mod tests {
             self.outputs.borrow_mut().get_mut(&(txid, vout)).unwrap().spent_by = Some(by);
         }
     }
+    /// A backend that finds a transaction by its id: it answers with the
+    /// output as it is, whatever script the caller expected.
     impl ChainView for Chain {
-        fn output(&self, outpoint: &OutPoint) -> Result<Option<ChainOutput>, ChainUnavailable> {
+        fn output(&self, outpoint: &OutPoint, _script: &elements::Script) -> Result<Option<ChainOutput>, ChainUnavailable> {
             if self.down {
                 return Err(ChainUnavailable);
             }
             Ok(self.outputs.borrow().get(&(outpoint.txid, outpoint.vout)).cloned())
+        }
+    }
+
+    /// A backend indexed by script, as an Electrum server is: it knows an
+    /// output only in the history of the script it pays.
+    struct ByScript<'a>(&'a Chain);
+    impl ChainView for ByScript<'_> {
+        fn output(&self, outpoint: &OutPoint, script: &elements::Script) -> Result<Option<ChainOutput>, ChainUnavailable> {
+            Ok(self.0.output(outpoint, script)?.filter(|output| output.txout.script_pubkey == *script))
         }
     }
 
@@ -1013,6 +1065,109 @@ mod tests {
         assert_eq!(entries[0].kind, kind::LEND_CLAIM_V1);
         assert_eq!(entries[0].status, EntryStatus::Active);
         assert!(statement(&store, "lending.example").is_empty());
+    }
+
+    /// An Electrum server knows an output only in the history of the script
+    /// it pays. Through such a backend the truth registers and moves along
+    /// the chain exactly as through one that finds transactions by id; a
+    /// description whose script is not the coin's is still refused, as a
+    /// coin that is not there.
+    #[test]
+    fn a_backend_indexed_by_script_serves_the_same_checks() {
+        let chain = Chain::default();
+        let (spec, params) = lender_position(&chain);
+        let by_script = ByScript(&chain);
+        let mut store = ContractStore::default();
+        let key = hex::encode(params.contract_id());
+
+        let mut lie = spec.clone();
+        lie.state = Some("46117756199".to_owned());
+        assert_eq!(register(&mut store, &lie, "paper.swaption.io", 1_000, &lender(), &by_script).outcome, Reject::CoinMismatch.into());
+        assert_eq!(register(&mut store, &lie, "paper.swaption.io", 1_000, &lender(), &chain).outcome, Reject::ScriptMismatch.into());
+        assert!(store.records().next().is_none());
+        assert_eq!(register(&mut store, &spec, "paper.swaption.io", 1_000, &lender(), &by_script).outcome, ContractOutcome::Registered);
+
+        // The held coin is looked up under the script the RECORD was stored
+        // with, so its spender is found and the update is believed.
+        let half = 230_58878100u64;
+        let mut moved = spec.clone();
+        moved.state = Some(half.to_string());
+        moved.coins = vec![SpecCoin {
+            txid: txid(0x53).to_string(),
+            vout: 1,
+            asset: LBTC.to_owned(),
+            amount: "500000".to_owned(),
+        }];
+        chain.put(txid(0x53), 1, LBTC, 500_000, params.script(Some(half)).unwrap());
+        assert_eq!(register(&mut store, &moved, "paper.swaption.io", 2_000, &lender(), &by_script).outcome, Reject::CoinMismatch.into());
+        chain.spend(txid(0x52), 0, txid(0x53));
+        assert_eq!(register(&mut store, &moved, "paper.swaption.io", 2_000, &lender(), &by_script).outcome, ContractOutcome::Updated);
+        assert_eq!(store.get(&key).unwrap().state, Some(half));
+        let mut over = moved.clone();
+        over.coins.clear();
+        chain.spend(txid(0x53), 1, txid(0x54));
+        assert_eq!(register(&mut store, &over, "paper.swaption.io", 3_000, &lender(), &by_script).outcome, ContractOutcome::Updated);
+        assert_eq!(store.get(&key).unwrap().status, ContractStatus::Closed { path: "unknown".to_owned() });
+    }
+
+    /// A host runs a registration against a copy of its store, off the
+    /// thread the store lives on. What the run added or changed is taken
+    /// in, except a record the person moved while the lookups ran.
+    #[test]
+    fn a_run_against_a_copy_is_adopted_unless_the_live_record_moved() {
+        let chain = Chain::default();
+        let (position, params) = lender_position(&chain);
+        let position_key = hex::encode(params.contract_id());
+        let token = asset_id(LENDER_TOKEN);
+        let claim_params = ContractParams::LendClaimV1 { lender_token: token };
+        let claim_key = hex::encode(claim_params.contract_id());
+        chain.put(txid(0x61), 1, USDT, 456_85276800, claim_script(token));
+        let claim = ContractSpec {
+            contract_id: claim_key.clone(),
+            kind: kind::LEND_CLAIM_V1.to_owned(),
+            leaf: hex::encode(claim_params.leaf()),
+            params: serde_json::from_str(&claim_params.canonical_json()).unwrap(),
+            role: "lender".to_owned(),
+            state: None,
+            coins: vec![SpecCoin { txid: txid(0x61).to_string(), vout: 1, asset: USDT.to_owned(), amount: "45685276800".to_owned() }],
+            label: None,
+        };
+
+        // The live store holds the position already.
+        let mut live = ContractStore::default();
+        assert_eq!(register(&mut live, &position, "paper.swaption.io", 1_000, &lender(), &chain).outcome, ContractOutcome::Registered);
+
+        // The run: the position moved along the chain, and a claim is new.
+        let before = live.clone();
+        let mut after = before.clone();
+        let half = 230_58878100u64;
+        let mut moved = position.clone();
+        moved.state = Some(half.to_string());
+        moved.coins = vec![SpecCoin { txid: txid(0x53).to_string(), vout: 1, asset: LBTC.to_owned(), amount: "500000".to_owned() }];
+        chain.put(txid(0x53), 1, LBTC, 500_000, params.script(Some(half)).unwrap());
+        chain.spend(txid(0x52), 0, txid(0x53));
+        let results = register_all(&mut after, &[moved, claim], "paper.swaption.io", true, 2_000, &lender(), &chain);
+        assert_eq!(results[0].outcome, ContractOutcome::Updated);
+        assert_eq!(results[1].outcome, ContractOutcome::Registered);
+
+        // Nothing happened meanwhile: both are taken in.
+        let mut quiet = live.clone();
+        let mut adopted = adopt_registered(&mut quiet, &before, &after);
+        adopted.sort();
+        let mut both = vec![position_key.clone(), claim_key.clone()];
+        both.sort();
+        assert_eq!(adopted, both);
+        assert_eq!(quiet, after);
+
+        // The person hid the position while the lookups ran: theirs stands,
+        // the claim is still taken in, and nothing else is touched.
+        assert!(live.set_hidden(&position_key, true));
+        assert_eq!(adopt_registered(&mut live, &before, &after), vec![claim_key.clone()]);
+        assert!(live.get(&position_key).unwrap().hidden);
+        assert_eq!(live.get(&position_key).unwrap().state, Some(461_17756200));
+        assert_eq!(live.get(&claim_key), after.get(&claim_key));
+        // Taking the same run in again changes nothing.
+        assert!(adopt_registered(&mut live, &before, &after).is_empty());
     }
 
     #[test]
