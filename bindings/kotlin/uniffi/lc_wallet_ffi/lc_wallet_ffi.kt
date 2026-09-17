@@ -654,8 +654,27 @@ internal open class UniffiForeignFutureStructVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructVoid.UniffiByValue,)
 }
+internal interface UniffiCallbackInterfaceContractChainMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`scriptHex`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 internal interface UniffiCallbackInterfaceWalletEventListenerMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`event`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("scriptHistory", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceContractChain(
+    @JvmField internal var `scriptHistory`: UniffiCallbackInterfaceContractChainMethod0? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `scriptHistory`: UniffiCallbackInterfaceContractChainMethod0? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceContractChain(`scriptHistory`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceContractChain) {
+        `scriptHistory` = other.`scriptHistory`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
 }
 @Structure.FieldOrder("onEvent", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceWalletEventListener(
@@ -673,6 +692,25 @@ internal open class UniffiVTableCallbackInterfaceWalletEventListener(
     }
 
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -833,6 +871,12 @@ fun uniffi_lc_wallet_ffi_checksum_func_summarize_pset(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_func_verify_fund_template(
 ): Short
+fun uniffi_lc_wallet_ffi_checksum_method_contractbook_records(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_contractbook_to_json(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_method_contractchain_script_history(
+): Short
 fun uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_identityservice_contacts_discover(
@@ -877,6 +921,8 @@ fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_provide_asset_balan
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_provide_receive_address(
 ): Short
+fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_contracts(
+): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_fcm_token(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_asset_balance(
@@ -897,9 +943,15 @@ fun uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_stop_session(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_method_walleteventlistener_on_event(
 ): Short
+fun uniffi_lc_wallet_ffi_checksum_constructor_contractbook_from_json(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_constructor_contractbook_new(
+): Short
 fun uniffi_lc_wallet_ffi_checksum_constructor_identityservice_new(
 ): Short
 fun uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new(
+): Short
+fun uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new_with_contracts(
 ): Short
 fun ffi_lc_wallet_ffi_uniffi_contract_version(
 ): Int
@@ -939,6 +991,7 @@ internal interface UniffiLib : Library {
             val lib = loadIndirect<UniffiLib>(componentName)
             // No need to check the contract version and checksums, since 
             // we already did that with `IntegrityCheckingUniffiLib` above.
+            uniffiCallbackInterfaceContractChain.register(lib)
             uniffiCallbackInterfaceWalletEventListener.register(lib)
             // Loading of library with integrity check done.
             lib
@@ -951,7 +1004,27 @@ internal interface UniffiLib : Library {
     }
 
     // FFI functions
-    fun uniffi_lc_wallet_ffi_fn_clone_identityservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_lc_wallet_ffi_fn_clone_contractbook(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_lc_wallet_ffi_fn_free_contractbook(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_constructor_contractbook_from_json(`json`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_lc_wallet_ffi_fn_constructor_contractbook_new(uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_lc_wallet_ffi_fn_method_contractbook_records(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_method_contractbook_to_json(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_clone_contractchain(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_lc_wallet_ffi_fn_free_contractchain(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_lc_wallet_ffi_fn_init_callback_vtable_contractchain(`vtable`: UniffiVTableCallbackInterfaceContractChain,
+): Unit
+fun uniffi_lc_wallet_ffi_fn_method_contractchain_script_history(`ptr`: Pointer,`scriptHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_lc_wallet_ffi_fn_clone_identityservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
 fun uniffi_lc_wallet_ffi_fn_free_identityservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -989,6 +1062,8 @@ fun uniffi_lc_wallet_ffi_fn_free_liquidconnectwallet(`ptr`: Pointer,uniffi_out_e
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_constructor_liquidconnectwallet_new(`url`: RustBuffer.ByValue,`descriptor`: RustBuffer.ByValue,`masterBlindingKey`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,`installIdHex`: RustBuffer.ByValue,`listener`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
+fun uniffi_lc_wallet_ffi_fn_constructor_liquidconnectwallet_new_with_contracts(`url`: RustBuffer.ByValue,`descriptor`: RustBuffer.ByValue,`masterBlindingKey`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,`installIdHex`: RustBuffer.ByValue,`book`: Pointer,`listener`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_fund(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,`pset`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_login(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1007,6 +1082,8 @@ fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_provide_asset_balance(`pt
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_provide_receive_address(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,`address`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_register_contracts(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,`allowed`: Byte,`facts`: RustBuffer.ByValue,`chain`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_register_fcm_token(`ptr`: Pointer,`token`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_asset_balance(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1174,6 +1251,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_lc_wallet_ffi_checksum_func_verify_fund_template() != 20986.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_contractbook_records() != 58186.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_contractbook_to_json() != 24831.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_contractchain_script_history() != 7631.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address() != 51379.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1240,6 +1326,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_provide_receive_address() != 8495.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_contracts() != 5276.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_fcm_token() != 65529.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1270,10 +1359,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_lc_wallet_ffi_checksum_method_walleteventlistener_on_event() != 25536.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lc_wallet_ffi_checksum_constructor_contractbook_from_json() != 11093.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_constructor_contractbook_new() != 62464.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lc_wallet_ffi_checksum_constructor_identityservice_new() != 63506.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new() != 29879.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new_with_contracts() != 55329.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1638,6 +1736,599 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
     override fun write(value: ByteArray, buf: ByteBuffer) {
         buf.putInt(value.size)
         buf.put(value)
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * The wallet's records of the contracts it did not sign, each verified
+ * before it was kept. Keep one per wallet: save `to_json()` after every
+ * registration and load it with `from_json` when the app starts.
+ */
+public interface ContractBookInterface {
+    
+    /**
+     * Every record, hidden ones included, for a host that shows them.
+     */
+    fun `records`(): List<ContractRecordInfo>
+    
+    fun `toJson`(): kotlin.String
+    
+    companion object
+}
+
+/**
+ * The wallet's records of the contracts it did not sign, each verified
+ * before it was kept. Keep one per wallet: save `to_json()` after every
+ * registration and load it with `from_json` when the app starts.
+ */
+open class ContractBook: Disposable, AutoCloseable, ContractBookInterface
+{
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+    constructor() :
+        this(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_constructor_contractbook_new(
+        _status)
+}
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_free_contractbook(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_clone_contractbook(pointer!!, status)
+        }
+    }
+
+    
+    /**
+     * Every record, hidden ones included, for a host that shows them.
+     */override fun `records`(): List<ContractRecordInfo> {
+            return FfiConverterSequenceTypeContractRecordInfo.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_contractbook_records(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    override fun `toJson`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_contractbook_to_json(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+    companion object {
+        
+    /**
+     * A book saved with `to_json`.
+     */
+    @Throws(LcException::class) fun `fromJson`(`json`: kotlin.String): ContractBook {
+            return FfiConverterTypeContractBook.lift(
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_constructor_contractbook_from_json(
+        FfiConverterString.lower(`json`),_status)
+}
+    )
+    }
+    
+
+        
+    }
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContractBook: FfiConverter<ContractBook, Pointer> {
+
+    override fun lower(value: ContractBook): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): ContractBook {
+        return ContractBook(value)
+    }
+
+    override fun read(buf: ByteBuffer): ContractBook {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: ContractBook) = 8UL
+
+    override fun write(value: ContractBook, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * The chain as the coin check needs it, implemented by the host over the
+ * backend it already uses. It is asked by script, as an Electrum or an
+ * Esplora server is indexed, and each script once per registration.
+ */
+public interface ContractChain {
+    
+    /**
+     * Every transaction that pays `script_hex` (a scriptPubKey, hex) or
+     * spends a coin of it, mempool included, each whole. Electrum:
+     * `blockchain.scripthash.get_history` (the scripthash is the SHA-256 of
+     * the script, byte-reversed), then `blockchain.transaction.get` for
+     * each; a height above 0 is confirmed. An empty list is an answer, and
+     * it means there is no such coin. Throw `ChainError.Unavailable` when
+     * the backend cannot say.
+     */
+    fun `scriptHistory`(`scriptHex`: kotlin.String): List<ChainTx>
+    
+    companion object
+}
+
+/**
+ * The chain as the coin check needs it, implemented by the host over the
+ * backend it already uses. It is asked by script, as an Electrum or an
+ * Esplora server is indexed, and each script once per registration.
+ */
+open class ContractChainImpl: Disposable, AutoCloseable, ContractChain
+{
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_free_contractchain(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_clone_contractchain(pointer!!, status)
+        }
+    }
+
+    
+    /**
+     * Every transaction that pays `script_hex` (a scriptPubKey, hex) or
+     * spends a coin of it, mempool included, each whole. Electrum:
+     * `blockchain.scripthash.get_history` (the scripthash is the SHA-256 of
+     * the script, byte-reversed), then `blockchain.transaction.get` for
+     * each; a height above 0 is confirmed. An empty list is an answer, and
+     * it means there is no such coin. Throw `ChainError.Unavailable` when
+     * the backend cannot say.
+     */
+    @Throws(ChainException::class)override fun `scriptHistory`(`scriptHex`: kotlin.String): List<ChainTx> {
+            return FfiConverterSequenceTypeChainTx.lift(
+    callWithPointer {
+    uniffiRustCallWithError(ChainException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_contractchain_script_history(
+        it, FfiConverterString.lower(`scriptHex`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceContractChain {
+    internal object `scriptHistory`: UniffiCallbackInterfaceContractChainMethod0 {
+        override fun callback(`uniffiHandle`: Long,`scriptHex`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeContractChain.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`scriptHistory`(
+                    FfiConverterString.lift(`scriptHex`),
+                )
+            }
+            val writeReturn = { value: List<ChainTx> -> uniffiOutReturn.setValue(FfiConverterSequenceTypeChainTx.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: ChainException -> FfiConverterTypeChainError.lower(e) }
+            )
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeContractChain.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceContractChain.UniffiByValue(
+        `scriptHistory`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_lc_wallet_ffi_fn_init_callback_vtable_contractchain(vtable)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContractChain: FfiConverter<ContractChain, Pointer> {
+    internal val handleMap = UniffiHandleMap<ContractChain>()
+
+    override fun lower(value: ContractChain): Pointer {
+        return Pointer(handleMap.insert(value))
+    }
+
+    override fun lift(value: Pointer): ContractChain {
+        return ContractChainImpl(value)
+    }
+
+    override fun read(buf: ByteBuffer): ContractChain {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: ContractChain) = 8UL
+
+    override fun write(value: ContractChain, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
     }
 }
 
@@ -2253,6 +2944,22 @@ public interface LiquidConnectWalletInterface {
      */
     fun `provideReceiveAddress`(`requestId`: kotlin.String, `address`: kotlin.String)
     
+    /**
+     * Verify a site's registration request and answer it. BLOCKS on the
+     * chain lookups: call it off the UI thread. `allowed` is the person's
+     * grant for this domain; when it is false nothing is looked up and every
+     * description is refused as `not_allowed`. What holds is kept in the
+     * book, the site is answered description by description, and what the
+     * wallet holds of the domain is stated again. Save the book's
+     * `to_json()` afterwards.
+     *
+     * Errors, and nothing is answered: the wallet was built without a
+     * book, the request is no longer live (it ran out, or the site
+     * withdrew it), or `facts` holds a script or an asset id that is not
+     * hex.
+     */
+    fun `registerContracts`(`requestId`: kotlin.String, `allowed`: kotlin.Boolean, `facts`: WalletFacts, `chain`: ContractChain): List<ContractResultInfo>
+    
     fun `registerFcmToken`(`token`: kotlin.String)
     
     fun `rejectAssetBalance`(`requestId`: kotlin.String)
@@ -2509,6 +3216,33 @@ open class LiquidConnectWallet: Disposable, AutoCloseable, LiquidConnectWalletIn
     
     
 
+    
+    /**
+     * Verify a site's registration request and answer it. BLOCKS on the
+     * chain lookups: call it off the UI thread. `allowed` is the person's
+     * grant for this domain; when it is false nothing is looked up and every
+     * description is refused as `not_allowed`. What holds is kept in the
+     * book, the site is answered description by description, and what the
+     * wallet holds of the domain is stated again. Save the book's
+     * `to_json()` afterwards.
+     *
+     * Errors, and nothing is answered: the wallet was built without a
+     * book, the request is no longer live (it ran out, or the site
+     * withdrew it), or `facts` holds a script or an asset id that is not
+     * hex.
+     */
+    @Throws(LcException::class)override fun `registerContracts`(`requestId`: kotlin.String, `allowed`: kotlin.Boolean, `facts`: WalletFacts, `chain`: ContractChain): List<ContractResultInfo> {
+            return FfiConverterSequenceTypeContractResultInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_register_contracts(
+        it, FfiConverterString.lower(`requestId`),FfiConverterBoolean.lower(`allowed`),FfiConverterTypeWalletFacts.lower(`facts`),FfiConverterTypeContractChain.lower(`chain`),_status)
+}
+    }
+    )
+    }
+    
+
     override fun `registerFcmToken`(`token`: kotlin.String)
         = 
     callWithPointer {
@@ -2611,8 +3345,30 @@ open class LiquidConnectWallet: Disposable, AutoCloseable, LiquidConnectWalletIn
     
 
     
+    companion object {
+        
+    /**
+     * The same wallet, keeping the contracts it did not sign in `book`. It
+     * names `contracts/1` at login, so a site may describe positions to it
+     * ([`WalletEvent::RegisterContractsRequested`], answered with
+     * [`LiquidConnectWallet::register_contracts`]). And it tells every site
+     * it is connected to what `book` holds of that site's contracts, an
+     * empty list where it holds nothing: that empty list is how a wallet
+     * restored from its seed is told again what is live, because a site
+     * cannot tell silence from a wallet that has not spoken yet.
+     */
+    @Throws(LcException::class) fun `newWithContracts`(`url`: kotlin.String, `descriptor`: kotlin.String, `masterBlindingKey`: kotlin.ByteArray, `network`: Network, `installIdHex`: kotlin.String, `book`: ContractBook, `listener`: WalletEventListener): LiquidConnectWallet {
+            return FfiConverterTypeLiquidConnectWallet.lift(
+    uniffiRustCallWithError(LcException) { _status ->
+    UniffiLib.INSTANCE.uniffi_lc_wallet_ffi_fn_constructor_liquidconnectwallet_new_with_contracts(
+        FfiConverterString.lower(`url`),FfiConverterString.lower(`descriptor`),FfiConverterByteArray.lower(`masterBlindingKey`),FfiConverterTypeNetwork.lower(`network`),FfiConverterString.lower(`installIdHex`),FfiConverterTypeContractBook.lower(`book`),FfiConverterTypeWalletEventListener.lower(`listener`),_status)
+}
+    )
+    }
     
-    companion object
+
+        
+    }
     
 }
 
@@ -2924,6 +3680,44 @@ public object FfiConverterTypeWalletEventListener: FfiConverter<WalletEventListe
 
 
 
+data class AssetAmount (
+    /**
+     * Asset id, hex-encoded (64 chars).
+     */
+    var `assetId`: kotlin.String, 
+    /**
+     * Base units.
+     */
+    var `amount`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAssetAmount: FfiConverterRustBuffer<AssetAmount> {
+    override fun read(buf: ByteBuffer): AssetAmount {
+        return AssetAmount(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AssetAmount) = (
+            FfiConverterString.allocationSize(value.`assetId`) +
+            FfiConverterULong.allocationSize(value.`amount`)
+    )
+
+    override fun write(value: AssetAmount, buf: ByteBuffer) {
+            FfiConverterString.write(value.`assetId`, buf)
+            FfiConverterULong.write(value.`amount`, buf)
+    }
+}
+
+
+
 data class AssetBalanceRequestInfo (
     var `requestId`: kotlin.String, 
     var `domain`: kotlin.String, 
@@ -2966,6 +3760,49 @@ public object FfiConverterTypeAssetBalanceRequestInfo: FfiConverterRustBuffer<As
             FfiConverterOptionalString.write(value.`description`, buf)
             FfiConverterString.write(value.`assetId`, buf)
             FfiConverterULong.write(value.`ttlMs`, buf)
+    }
+}
+
+
+
+/**
+ * A transaction in a script's history, as the host's chain backend has it.
+ */
+data class ChainTx (
+    /**
+     * The whole transaction, consensus-encoded, hex. Its id is computed
+     * from these bytes, never taken from the backend.
+     */
+    var `transactionHex`: kotlin.String, 
+    /**
+     * In a block. A mempool transaction belongs in the history too,
+     * unconfirmed: a spend still in the mempool is a spend.
+     */
+    var `confirmed`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChainTx: FfiConverterRustBuffer<ChainTx> {
+    override fun read(buf: ByteBuffer): ChainTx {
+        return ChainTx(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChainTx) = (
+            FfiConverterString.allocationSize(value.`transactionHex`) +
+            FfiConverterBoolean.allocationSize(value.`confirmed`)
+    )
+
+    override fun write(value: ChainTx, buf: ByteBuffer) {
+            FfiConverterString.write(value.`transactionHex`, buf)
+            FfiConverterBoolean.write(value.`confirmed`, buf)
     }
 }
 
@@ -3097,6 +3934,187 @@ public object FfiConverterTypeContactMatchInfo: FfiConverterRustBuffer<ContactMa
     override fun write(value: ContactMatchInfo, buf: ByteBuffer) {
             FfiConverterUInt.write(value.`inputIndex`, buf)
             FfiConverterString.write(value.`identityId`, buf)
+    }
+}
+
+
+
+data class ContractCoinInfo (
+    var `txid`: kotlin.String, 
+    var `vout`: kotlin.UInt, 
+    /**
+     * Asset id, hex.
+     */
+    var `assetId`: kotlin.String, 
+    /**
+     * Base units.
+     */
+    var `amount`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContractCoinInfo: FfiConverterRustBuffer<ContractCoinInfo> {
+    override fun read(buf: ByteBuffer): ContractCoinInfo {
+        return ContractCoinInfo(
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ContractCoinInfo) = (
+            FfiConverterString.allocationSize(value.`txid`) +
+            FfiConverterUInt.allocationSize(value.`vout`) +
+            FfiConverterString.allocationSize(value.`assetId`) +
+            FfiConverterULong.allocationSize(value.`amount`)
+    )
+
+    override fun write(value: ContractCoinInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`txid`, buf)
+            FfiConverterUInt.write(value.`vout`, buf)
+            FfiConverterString.write(value.`assetId`, buf)
+            FfiConverterULong.write(value.`amount`, buf)
+    }
+}
+
+
+
+/**
+ * One record, as a host shows it.
+ */
+data class ContractRecordInfo (
+    /**
+     * Unique in the book.
+     */
+    var `key`: kotlin.String, 
+    var `contractId`: kotlin.String, 
+    /**
+     * "sw/lend/position/v5", "sw/lend/offer/v1", "sw/lend/claim/v1", …
+     */
+    var `kind`: kotlin.String, 
+    /**
+     * "borrower" or "lender".
+     */
+    var `role`: kotlin.String, 
+    /**
+     * The site that registered it, as the connect server names it.
+     */
+    var `domain`: kotlin.String, 
+    /**
+     * The mutable slot as a decimal string, where the kind has one: a
+     * position's remaining debt, the cash an offer still holds.
+     */
+    var `state`: kotlin.String?, 
+    var `status`: ContractStatusInfo, 
+    /**
+     * Where the contract's money sits.
+     */
+    var `coins`: List<ContractCoinInfo>, 
+    /**
+     * The terms, as the kind's canonical JSON object.
+     */
+    var `paramsJson`: kotlin.String, 
+    /**
+     * The person hid it. It is still held, and still stated.
+     */
+    var `hidden`: kotlin.Boolean, 
+    /**
+     * Unix seconds; 0 when unknown.
+     */
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContractRecordInfo: FfiConverterRustBuffer<ContractRecordInfo> {
+    override fun read(buf: ByteBuffer): ContractRecordInfo {
+        return ContractRecordInfo(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterTypeContractStatusInfo.read(buf),
+            FfiConverterSequenceTypeContractCoinInfo.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ContractRecordInfo) = (
+            FfiConverterString.allocationSize(value.`key`) +
+            FfiConverterString.allocationSize(value.`contractId`) +
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterString.allocationSize(value.`role`) +
+            FfiConverterString.allocationSize(value.`domain`) +
+            FfiConverterOptionalString.allocationSize(value.`state`) +
+            FfiConverterTypeContractStatusInfo.allocationSize(value.`status`) +
+            FfiConverterSequenceTypeContractCoinInfo.allocationSize(value.`coins`) +
+            FfiConverterString.allocationSize(value.`paramsJson`) +
+            FfiConverterBoolean.allocationSize(value.`hidden`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: ContractRecordInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`key`, buf)
+            FfiConverterString.write(value.`contractId`, buf)
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterString.write(value.`role`, buf)
+            FfiConverterString.write(value.`domain`, buf)
+            FfiConverterOptionalString.write(value.`state`, buf)
+            FfiConverterTypeContractStatusInfo.write(value.`status`, buf)
+            FfiConverterSequenceTypeContractCoinInfo.write(value.`coins`, buf)
+            FfiConverterString.write(value.`paramsJson`, buf)
+            FfiConverterBoolean.write(value.`hidden`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class ContractResultInfo (
+    var `contractId`: kotlin.String, 
+    var `outcome`: ContractOutcomeInfo
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContractResultInfo: FfiConverterRustBuffer<ContractResultInfo> {
+    override fun read(buf: ByteBuffer): ContractResultInfo {
+        return ContractResultInfo(
+            FfiConverterString.read(buf),
+            FfiConverterTypeContractOutcomeInfo.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ContractResultInfo) = (
+            FfiConverterString.allocationSize(value.`contractId`) +
+            FfiConverterTypeContractOutcomeInfo.allocationSize(value.`outcome`)
+    )
+
+    override fun write(value: ContractResultInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`contractId`, buf)
+            FfiConverterTypeContractOutcomeInfo.write(value.`outcome`, buf)
     }
 }
 
@@ -3921,6 +4939,331 @@ public object FfiConverterTypeVerifyOutcomeInfo: FfiConverterRustBuffer<VerifyOu
 
 
 
+/**
+ * What the wallet is, for the role check: a role is bound by a script that
+ * is the wallet's or a token the wallet holds, never by the site's word.
+ */
+data class WalletFacts (
+    /**
+     * Every scriptPubKey the wallet has derived, used or not, hex-encoded.
+     * An address handed to a site long ago and never paid must be among
+     * them.
+     */
+    var `scripts`: List<kotlin.String>, 
+    /**
+     * What the wallet holds, per coin or per asset (amounts of one asset
+     * are added up). A position token or a lender token is held when the
+     * wallet holds exactly one unit of it.
+     */
+    var `balances`: List<AssetAmount>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWalletFacts: FfiConverterRustBuffer<WalletFacts> {
+    override fun read(buf: ByteBuffer): WalletFacts {
+        return WalletFacts(
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceTypeAssetAmount.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WalletFacts) = (
+            FfiConverterSequenceString.allocationSize(value.`scripts`) +
+            FfiConverterSequenceTypeAssetAmount.allocationSize(value.`balances`)
+    )
+
+    override fun write(value: WalletFacts, buf: ByteBuffer) {
+            FfiConverterSequenceString.write(value.`scripts`, buf)
+            FfiConverterSequenceTypeAssetAmount.write(value.`balances`, buf)
+    }
+}
+
+
+
+
+
+/**
+ * Why the host's chain backend gave no history.
+ */
+sealed class ChainException: kotlin.Exception() {
+    
+    /**
+     * The backend cannot answer now (offline, timed out, overloaded). The
+     * site is told `chain_unavailable` and asks again later; nothing is
+     * refused for good.
+     */
+    class Unavailable(
+        
+        val `reason`: kotlin.String
+        ) : ChainException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<ChainException> {
+        override fun lift(error_buf: RustBuffer.ByValue): ChainException = FfiConverterTypeChainError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChainError : FfiConverterRustBuffer<ChainException> {
+    override fun read(buf: ByteBuffer): ChainException {
+        
+
+        return when(buf.getInt()) {
+            1 -> ChainException.Unavailable(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: ChainException): ULong {
+        return when(value) {
+            is ChainException.Unavailable -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: ChainException, buf: ByteBuffer) {
+        when(value) {
+            is ChainException.Unavailable -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
+/**
+ * How the wallet answered one description.
+ */
+sealed class ContractOutcomeInfo {
+    
+    /**
+     * Verified and kept as a new record.
+     */
+    object Registered : ContractOutcomeInfo()
+    
+    
+    /**
+     * Verified, and a record the wallet had moved on (its state or coins).
+     */
+    object Updated : ContractOutcomeInfo()
+    
+    
+    /**
+     * Verified, and nothing new.
+     */
+    object Unchanged : ContractOutcomeInfo()
+    
+    
+    /**
+     * Refused: `unknown_kind`, `leaf_mismatch`, `id_mismatch`,
+     * `script_mismatch`, `role_not_bound`, `coin_mismatch`,
+     * `not_explicit`, `chain_unavailable` (the site asks again later),
+     * `not_allowed`, `too_many`.
+     */
+    data class Rejected(
+        val `reason`: kotlin.String) : ContractOutcomeInfo() {
+        companion object
+    }
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContractOutcomeInfo : FfiConverterRustBuffer<ContractOutcomeInfo>{
+    override fun read(buf: ByteBuffer): ContractOutcomeInfo {
+        return when(buf.getInt()) {
+            1 -> ContractOutcomeInfo.Registered
+            2 -> ContractOutcomeInfo.Updated
+            3 -> ContractOutcomeInfo.Unchanged
+            4 -> ContractOutcomeInfo.Rejected(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: ContractOutcomeInfo) = when(value) {
+        is ContractOutcomeInfo.Registered -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is ContractOutcomeInfo.Updated -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is ContractOutcomeInfo.Unchanged -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is ContractOutcomeInfo.Rejected -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: ContractOutcomeInfo, buf: ByteBuffer) {
+        when(value) {
+            is ContractOutcomeInfo.Registered -> {
+                buf.putInt(1)
+                Unit
+            }
+            is ContractOutcomeInfo.Updated -> {
+                buf.putInt(2)
+                Unit
+            }
+            is ContractOutcomeInfo.Unchanged -> {
+                buf.putInt(3)
+                Unit
+            }
+            is ContractOutcomeInfo.Rejected -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+sealed class ContractStatusInfo {
+    
+    /**
+     * Approved, the coin not seen on chain yet.
+     */
+    object Pending : ContractStatusInfo()
+    
+    
+    object Active : ContractStatusInfo()
+    
+    
+    /**
+     * Past the kind's cutoff, the coin still unspent.
+     */
+    object Expired : ContractStatusInfo()
+    
+    
+    /**
+     * Over. `path` says how: "exercise", "lapse", "last_look", "fill",
+     * "cancel", "expire", "collect", "sold" or "unknown".
+     */
+    data class Closed(
+        val `path`: kotlin.String) : ContractStatusInfo() {
+        companion object
+    }
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContractStatusInfo : FfiConverterRustBuffer<ContractStatusInfo>{
+    override fun read(buf: ByteBuffer): ContractStatusInfo {
+        return when(buf.getInt()) {
+            1 -> ContractStatusInfo.Pending
+            2 -> ContractStatusInfo.Active
+            3 -> ContractStatusInfo.Expired
+            4 -> ContractStatusInfo.Closed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: ContractStatusInfo) = when(value) {
+        is ContractStatusInfo.Pending -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is ContractStatusInfo.Active -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is ContractStatusInfo.Expired -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is ContractStatusInfo.Closed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`path`)
+            )
+        }
+    }
+
+    override fun write(value: ContractStatusInfo, buf: ByteBuffer) {
+        when(value) {
+            is ContractStatusInfo.Pending -> {
+                buf.putInt(1)
+                Unit
+            }
+            is ContractStatusInfo.Active -> {
+                buf.putInt(2)
+                Unit
+            }
+            is ContractStatusInfo.Expired -> {
+                buf.putInt(3)
+                Unit
+            }
+            is ContractStatusInfo.Closed -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`path`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
 
 
 sealed class LcException(message: String): kotlin.Exception(message) {
@@ -4104,13 +5447,12 @@ sealed class WalletEvent {
     /**
      * A relying party describes contracts this wallet is party to but did
      * not sign, for the wallet to verify and keep (covenant positions,
-     * phase 1). The connect server sends it only to an install that
-     * advertised `contracts/1`, and a host advertises that only once it
-     * can verify: the verifier is `lc_wallet_core::contract_registration`,
-     * whose binding here (the wallet's own facts and a chain view handed
-     * across the boundary, and the call that answers) is not built yet.
-     * Until it is, no host of this binding advertises the feature and
-     * this event never arrives.
+     * phase 1). The connect server sends it only to a wallet built with
+     * [`LiquidConnectWallet::new_with_contracts`], which names
+     * `contracts/1`. Decide whether the person lets this domain record
+     * positions in the wallet, then answer with
+     * [`LiquidConnectWallet::register_contracts`]. Nothing in
+     * `contracts_json` is trusted before that call has checked it.
      */
     data class RegisterContractsRequested(
         val `request`: RegisterContractsRequestInfo) : WalletEvent() {
@@ -4691,6 +6033,90 @@ public object FfiConverterSequenceUInt: FfiConverterRustBuffer<List<kotlin.UInt>
 /**
  * @suppress
  */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeAssetAmount: FfiConverterRustBuffer<List<AssetAmount>> {
+    override fun read(buf: ByteBuffer): List<AssetAmount> {
+        val len = buf.getInt()
+        return List<AssetAmount>(len) {
+            FfiConverterTypeAssetAmount.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<AssetAmount>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeAssetAmount.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<AssetAmount>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeAssetAmount.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeChainTx: FfiConverterRustBuffer<List<ChainTx>> {
+    override fun read(buf: ByteBuffer): List<ChainTx> {
+        val len = buf.getInt()
+        return List<ChainTx>(len) {
+            FfiConverterTypeChainTx.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChainTx>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChainTx.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChainTx>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChainTx.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeContactEntry: FfiConverterRustBuffer<List<ContactEntry>> {
     override fun read(buf: ByteBuffer): List<ContactEntry> {
         val len = buf.getInt()
@@ -4765,6 +6191,90 @@ public object FfiConverterSequenceTypeContactMatchInfo: FfiConverterRustBuffer<L
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeContactMatchInfo.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeContractCoinInfo: FfiConverterRustBuffer<List<ContractCoinInfo>> {
+    override fun read(buf: ByteBuffer): List<ContractCoinInfo> {
+        val len = buf.getInt()
+        return List<ContractCoinInfo>(len) {
+            FfiConverterTypeContractCoinInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ContractCoinInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeContractCoinInfo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ContractCoinInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeContractCoinInfo.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeContractRecordInfo: FfiConverterRustBuffer<List<ContractRecordInfo>> {
+    override fun read(buf: ByteBuffer): List<ContractRecordInfo> {
+        val len = buf.getInt()
+        return List<ContractRecordInfo>(len) {
+            FfiConverterTypeContractRecordInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ContractRecordInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeContractRecordInfo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ContractRecordInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeContractRecordInfo.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeContractResultInfo: FfiConverterRustBuffer<List<ContractResultInfo>> {
+    override fun read(buf: ByteBuffer): List<ContractResultInfo> {
+        val len = buf.getInt()
+        return List<ContractResultInfo>(len) {
+            FfiConverterTypeContractResultInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ContractResultInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeContractResultInfo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ContractResultInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeContractResultInfo.write(it, buf)
         }
     }
 }

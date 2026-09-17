@@ -251,11 +251,26 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureStr
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CONTRACT_CHAIN_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CONTRACT_CHAIN_METHOD0
+typedef void (*UniffiCallbackInterfaceContractChainMethod0)(uint64_t, RustBuffer, RustBuffer* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_WALLET_EVENT_LISTENER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_WALLET_EVENT_LISTENER_METHOD0
 typedef void (*UniffiCallbackInterfaceWalletEventListenerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
+
+#endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_CONTRACT_CHAIN
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_CONTRACT_CHAIN
+typedef struct UniffiVTableCallbackInterfaceContractChain {
+    UniffiCallbackInterfaceContractChainMethod0 _Nonnull scriptHistory;
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+} UniffiVTableCallbackInterfaceContractChain;
 
 #endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_WALLET_EVENT_LISTENER
@@ -265,6 +280,57 @@ typedef struct UniffiVTableCallbackInterfaceWalletEventListener {
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceWalletEventListener;
 
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CLONE_CONTRACTBOOK
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CLONE_CONTRACTBOOK
+void*_Nonnull uniffi_lc_wallet_ffi_fn_clone_contractbook(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_FREE_CONTRACTBOOK
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_FREE_CONTRACTBOOK
+void uniffi_lc_wallet_ffi_fn_free_contractbook(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CONSTRUCTOR_CONTRACTBOOK_FROM_JSON
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CONSTRUCTOR_CONTRACTBOOK_FROM_JSON
+void*_Nonnull uniffi_lc_wallet_ffi_fn_constructor_contractbook_from_json(RustBuffer json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CONSTRUCTOR_CONTRACTBOOK_NEW
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CONSTRUCTOR_CONTRACTBOOK_NEW
+void*_Nonnull uniffi_lc_wallet_ffi_fn_constructor_contractbook_new(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_CONTRACTBOOK_RECORDS
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_CONTRACTBOOK_RECORDS
+RustBuffer uniffi_lc_wallet_ffi_fn_method_contractbook_records(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_CONTRACTBOOK_TO_JSON
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_CONTRACTBOOK_TO_JSON
+RustBuffer uniffi_lc_wallet_ffi_fn_method_contractbook_to_json(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CLONE_CONTRACTCHAIN
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CLONE_CONTRACTCHAIN
+void*_Nonnull uniffi_lc_wallet_ffi_fn_clone_contractchain(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_FREE_CONTRACTCHAIN
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_FREE_CONTRACTCHAIN
+void uniffi_lc_wallet_ffi_fn_free_contractchain(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_INIT_CALLBACK_VTABLE_CONTRACTCHAIN
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_INIT_CALLBACK_VTABLE_CONTRACTCHAIN
+void uniffi_lc_wallet_ffi_fn_init_callback_vtable_contractchain(const UniffiVTableCallbackInterfaceContractChain* _Nonnull vtable
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_CONTRACTCHAIN_SCRIPT_HISTORY
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_CONTRACTCHAIN_SCRIPT_HISTORY
+RustBuffer uniffi_lc_wallet_ffi_fn_method_contractchain_script_history(void*_Nonnull ptr, RustBuffer script_hex, RustCallStatus *_Nonnull out_status
+);
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CLONE_IDENTITYSERVICE
 #define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CLONE_IDENTITYSERVICE
@@ -361,6 +427,11 @@ void uniffi_lc_wallet_ffi_fn_free_liquidconnectwallet(void*_Nonnull ptr, RustCal
 void*_Nonnull uniffi_lc_wallet_ffi_fn_constructor_liquidconnectwallet_new(RustBuffer url, RustBuffer descriptor, RustBuffer master_blinding_key, RustBuffer network, RustBuffer install_id_hex, void*_Nonnull listener, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CONSTRUCTOR_LIQUIDCONNECTWALLET_NEW_WITH_CONTRACTS
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_CONSTRUCTOR_LIQUIDCONNECTWALLET_NEW_WITH_CONTRACTS
+void*_Nonnull uniffi_lc_wallet_ffi_fn_constructor_liquidconnectwallet_new_with_contracts(RustBuffer url, RustBuffer descriptor, RustBuffer master_blinding_key, RustBuffer network, RustBuffer install_id_hex, void*_Nonnull book, void*_Nonnull listener, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_LIQUIDCONNECTWALLET_ACCEPT_FUND
 #define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_LIQUIDCONNECTWALLET_ACCEPT_FUND
 void uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_fund(void*_Nonnull ptr, RustBuffer request_id, RustBuffer pset, RustCallStatus *_Nonnull out_status
@@ -404,6 +475,11 @@ void uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_provide_asset_balance(vo
 #ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_LIQUIDCONNECTWALLET_PROVIDE_RECEIVE_ADDRESS
 #define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_LIQUIDCONNECTWALLET_PROVIDE_RECEIVE_ADDRESS
 void uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_provide_receive_address(void*_Nonnull ptr, RustBuffer request_id, RustBuffer address, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_LIQUIDCONNECTWALLET_REGISTER_CONTRACTS
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_LIQUIDCONNECTWALLET_REGISTER_CONTRACTS
+RustBuffer uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_register_contracts(void*_Nonnull ptr, RustBuffer request_id, int8_t allowed, RustBuffer facts, void*_Nonnull chain, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_FN_METHOD_LIQUIDCONNECTWALLET_REGISTER_FCM_TOKEN
@@ -785,6 +861,24 @@ uint16_t uniffi_lc_wallet_ffi_checksum_func_verify_fund_template(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_CONTRACTBOOK_RECORDS
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_CONTRACTBOOK_RECORDS
+uint16_t uniffi_lc_wallet_ffi_checksum_method_contractbook_records(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_CONTRACTBOOK_TO_JSON
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_CONTRACTBOOK_TO_JSON
+uint16_t uniffi_lc_wallet_ffi_checksum_method_contractbook_to_json(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_CONTRACTCHAIN_SCRIPT_HISTORY
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_CONTRACTCHAIN_SCRIPT_HISTORY
+uint16_t uniffi_lc_wallet_ffi_checksum_method_contractchain_script_history(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_IDENTITYSERVICE_CONTACT_ADDRESS
 #define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_IDENTITYSERVICE_CONTACT_ADDRESS
 uint16_t uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address(void
@@ -917,6 +1011,12 @@ uint16_t uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_provide_receiv
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_LIQUIDCONNECTWALLET_REGISTER_CONTRACTS
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_LIQUIDCONNECTWALLET_REGISTER_CONTRACTS
+uint16_t uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_contracts(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_LIQUIDCONNECTWALLET_REGISTER_FCM_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_METHOD_LIQUIDCONNECTWALLET_REGISTER_FCM_TOKEN
 uint16_t uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_fcm_token(void
@@ -977,6 +1077,18 @@ uint16_t uniffi_lc_wallet_ffi_checksum_method_walleteventlistener_on_event(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_CONTRACTBOOK_FROM_JSON
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_CONTRACTBOOK_FROM_JSON
+uint16_t uniffi_lc_wallet_ffi_checksum_constructor_contractbook_from_json(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_CONTRACTBOOK_NEW
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_CONTRACTBOOK_NEW
+uint16_t uniffi_lc_wallet_ffi_checksum_constructor_contractbook_new(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_IDENTITYSERVICE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_IDENTITYSERVICE_NEW
 uint16_t uniffi_lc_wallet_ffi_checksum_constructor_identityservice_new(void
@@ -986,6 +1098,12 @@ uint16_t uniffi_lc_wallet_ffi_checksum_constructor_identityservice_new(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_LIQUIDCONNECTWALLET_NEW
 #define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_LIQUIDCONNECTWALLET_NEW
 uint16_t uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_LIQUIDCONNECTWALLET_NEW_WITH_CONTRACTS
+#define UNIFFI_FFIDEF_UNIFFI_LC_WALLET_FFI_CHECKSUM_CONSTRUCTOR_LIQUIDCONNECTWALLET_NEW_WITH_CONTRACTS
+uint16_t uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new_with_contracts(void
     
 );
 #endif

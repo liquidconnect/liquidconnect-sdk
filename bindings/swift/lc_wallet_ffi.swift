@@ -554,6 +554,374 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 /**
+ * The wallet's records of the contracts it did not sign, each verified
+ * before it was kept. Keep one per wallet: save `to_json()` after every
+ * registration and load it with `from_json` when the app starts.
+ */
+public protocol ContractBookProtocol: AnyObject, Sendable {
+    
+    /**
+     * Every record, hidden ones included, for a host that shows them.
+     */
+    func records()  -> [ContractRecordInfo]
+    
+    func toJson()  -> String
+    
+}
+/**
+ * The wallet's records of the contracts it did not sign, each verified
+ * before it was kept. Keep one per wallet: save `to_json()` after every
+ * registration and load it with `from_json` when the app starts.
+ */
+open class ContractBook: ContractBookProtocol, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_lc_wallet_ffi_fn_clone_contractbook(self.pointer, $0) }
+    }
+public convenience init() {
+    let pointer =
+        try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_constructor_contractbook_new($0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_lc_wallet_ffi_fn_free_contractbook(pointer, $0) }
+    }
+
+    
+    /**
+     * A book saved with `to_json`.
+     */
+public static func fromJson(json: String)throws  -> ContractBook  {
+    return try  FfiConverterTypeContractBook_lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_constructor_contractbook_from_json(
+        FfiConverterString.lower(json),$0
+    )
+})
+}
+    
+
+    
+    /**
+     * Every record, hidden ones included, for a host that shows them.
+     */
+open func records() -> [ContractRecordInfo]  {
+    return try!  FfiConverterSequenceTypeContractRecordInfo.lift(try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_contractbook_records(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func toJson() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_contractbook_to_json(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContractBook: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = ContractBook
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> ContractBook {
+        return ContractBook(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: ContractBook) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContractBook {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: ContractBook, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractBook_lift(_ pointer: UnsafeMutableRawPointer) throws -> ContractBook {
+    return try FfiConverterTypeContractBook.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractBook_lower(_ value: ContractBook) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeContractBook.lower(value)
+}
+
+
+
+
+
+
+/**
+ * The chain as the coin check needs it, implemented by the host over the
+ * backend it already uses. It is asked by script, as an Electrum or an
+ * Esplora server is indexed, and each script once per registration.
+ */
+public protocol ContractChain: AnyObject, Sendable {
+    
+    /**
+     * Every transaction that pays `script_hex` (a scriptPubKey, hex) or
+     * spends a coin of it, mempool included, each whole. Electrum:
+     * `blockchain.scripthash.get_history` (the scripthash is the SHA-256 of
+     * the script, byte-reversed), then `blockchain.transaction.get` for
+     * each; a height above 0 is confirmed. An empty list is an answer, and
+     * it means there is no such coin. Throw `ChainError.Unavailable` when
+     * the backend cannot say.
+     */
+    func scriptHistory(scriptHex: String) throws  -> [ChainTx]
+    
+}
+/**
+ * The chain as the coin check needs it, implemented by the host over the
+ * backend it already uses. It is asked by script, as an Electrum or an
+ * Esplora server is indexed, and each script once per registration.
+ */
+open class ContractChainImpl: ContractChain, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_lc_wallet_ffi_fn_clone_contractchain(self.pointer, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_lc_wallet_ffi_fn_free_contractchain(pointer, $0) }
+    }
+
+    
+
+    
+    /**
+     * Every transaction that pays `script_hex` (a scriptPubKey, hex) or
+     * spends a coin of it, mempool included, each whole. Electrum:
+     * `blockchain.scripthash.get_history` (the scripthash is the SHA-256 of
+     * the script, byte-reversed), then `blockchain.transaction.get` for
+     * each; a height above 0 is confirmed. An empty list is an answer, and
+     * it means there is no such coin. Throw `ChainError.Unavailable` when
+     * the backend cannot say.
+     */
+open func scriptHistory(scriptHex: String)throws  -> [ChainTx]  {
+    return try  FfiConverterSequenceTypeChainTx.lift(try rustCallWithError(FfiConverterTypeChainError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_contractchain_script_history(self.uniffiClonePointer(),
+        FfiConverterString.lower(scriptHex),$0
+    )
+})
+}
+    
+
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceContractChain {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceContractChain] = [UniffiVTableCallbackInterfaceContractChain(
+        scriptHistory: { (
+            uniffiHandle: UInt64,
+            scriptHex: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> [ChainTx] in
+                guard let uniffiObj = try? FfiConverterTypeContractChain.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.scriptHistory(
+                     scriptHex: try FfiConverterString.lift(scriptHex)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterSequenceTypeChainTx.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeChainError_lower
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterTypeContractChain.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface ContractChain: handle missing in uniffiFree")
+            }
+        }
+    )]
+}
+
+private func uniffiCallbackInitContractChain() {
+    uniffi_lc_wallet_ffi_fn_init_callback_vtable_contractchain(UniffiCallbackInterfaceContractChain.vtable)
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContractChain: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<ContractChain>()
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = ContractChain
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> ContractChain {
+        return ContractChainImpl(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: ContractChain) -> UnsafeMutableRawPointer {
+        guard let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: handleMap.insert(obj: value))) else {
+            fatalError("Cast to UnsafeMutableRawPointer failed")
+        }
+        return ptr
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContractChain {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: ContractChain, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractChain_lift(_ pointer: UnsafeMutableRawPointer) throws -> ContractChain {
+    return try FfiConverterTypeContractChain.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractChain_lower(_ value: ContractChain) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeContractChain.lower(value)
+}
+
+
+
+
+
+
+/**
  * The identity API for the connected wallet's user: verified email
  * (free), verified phone (paid from the wallet itself as an ordinary
  * sign request), contact discovery and pay-to-contact. Constructed
@@ -898,6 +1266,22 @@ public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
      */
     func provideReceiveAddress(requestId: String, address: String) 
     
+    /**
+     * Verify a site's registration request and answer it. BLOCKS on the
+     * chain lookups: call it off the UI thread. `allowed` is the person's
+     * grant for this domain; when it is false nothing is looked up and every
+     * description is refused as `not_allowed`. What holds is kept in the
+     * book, the site is answered description by description, and what the
+     * wallet holds of the domain is stated again. Save the book's
+     * `to_json()` afterwards.
+     *
+     * Errors, and nothing is answered: the wallet was built without a
+     * book, the request is no longer live (it ran out, or the site
+     * withdrew it), or `facts` holds a script or an asset id that is not
+     * hex.
+     */
+    func registerContracts(requestId: String, allowed: Bool, facts: WalletFacts, chain: ContractChain) throws  -> [ContractResultInfo]
+    
     func registerFcmToken(token: String) 
     
     func rejectAssetBalance(requestId: String) 
@@ -988,6 +1372,30 @@ public convenience init(url: String, descriptor: String, masterBlindingKey: Data
         try! rustCall { uniffi_lc_wallet_ffi_fn_free_liquidconnectwallet(pointer, $0) }
     }
 
+    
+    /**
+     * The same wallet, keeping the contracts it did not sign in `book`. It
+     * names `contracts/1` at login, so a site may describe positions to it
+     * ([`WalletEvent::RegisterContractsRequested`], answered with
+     * [`LiquidConnectWallet::register_contracts`]). And it tells every site
+     * it is connected to what `book` holds of that site's contracts, an
+     * empty list where it holds nothing: that empty list is how a wallet
+     * restored from its seed is told again what is live, because a site
+     * cannot tell silence from a wallet that has not spoken yet.
+     */
+public static func newWithContracts(url: String, descriptor: String, masterBlindingKey: Data, network: Network, installIdHex: String, book: ContractBook, listener: WalletEventListener)throws  -> LiquidConnectWallet  {
+    return try  FfiConverterTypeLiquidConnectWallet_lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_constructor_liquidconnectwallet_new_with_contracts(
+        FfiConverterString.lower(url),
+        FfiConverterString.lower(descriptor),
+        FfiConverterData.lower(masterBlindingKey),
+        FfiConverterTypeNetwork_lower(network),
+        FfiConverterString.lower(installIdHex),
+        FfiConverterTypeContractBook_lower(book),
+        FfiConverterTypeWalletEventListener_lower(listener),$0
+    )
+})
+}
     
 
     
@@ -1095,6 +1503,31 @@ open func provideReceiveAddress(requestId: String, address: String)  {try! rustC
         FfiConverterString.lower(address),$0
     )
 }
+}
+    
+    /**
+     * Verify a site's registration request and answer it. BLOCKS on the
+     * chain lookups: call it off the UI thread. `allowed` is the person's
+     * grant for this domain; when it is false nothing is looked up and every
+     * description is refused as `not_allowed`. What holds is kept in the
+     * book, the site is answered description by description, and what the
+     * wallet holds of the domain is stated again. Save the book's
+     * `to_json()` afterwards.
+     *
+     * Errors, and nothing is answered: the wallet was built without a
+     * book, the request is no longer live (it ran out, or the site
+     * withdrew it), or `facts` holds a script or an asset id that is not
+     * hex.
+     */
+open func registerContracts(requestId: String, allowed: Bool, facts: WalletFacts, chain: ContractChain)throws  -> [ContractResultInfo]  {
+    return try  FfiConverterSequenceTypeContractResultInfo.lift(try rustCallWithError(FfiConverterTypeLcError_lift) {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_register_contracts(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),
+        FfiConverterBool.lower(allowed),
+        FfiConverterTypeWalletFacts_lower(facts),
+        FfiConverterTypeContractChain_lower(chain),$0
+    )
+})
 }
     
 open func registerFcmToken(token: String)  {try! rustCall() {
@@ -1397,6 +1830,88 @@ public func FfiConverterTypeWalletEventListener_lower(_ value: WalletEventListen
 
 
 
+public struct AssetAmount {
+    /**
+     * Asset id, hex-encoded (64 chars).
+     */
+    public var assetId: String
+    /**
+     * Base units.
+     */
+    public var amount: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Asset id, hex-encoded (64 chars).
+         */assetId: String, 
+        /**
+         * Base units.
+         */amount: UInt64) {
+        self.assetId = assetId
+        self.amount = amount
+    }
+}
+
+#if compiler(>=6)
+extension AssetAmount: Sendable {}
+#endif
+
+
+extension AssetAmount: Equatable, Hashable {
+    public static func ==(lhs: AssetAmount, rhs: AssetAmount) -> Bool {
+        if lhs.assetId != rhs.assetId {
+            return false
+        }
+        if lhs.amount != rhs.amount {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(assetId)
+        hasher.combine(amount)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAssetAmount: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AssetAmount {
+        return
+            try AssetAmount(
+                assetId: FfiConverterString.read(from: &buf), 
+                amount: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AssetAmount, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.assetId, into: &buf)
+        FfiConverterUInt64.write(value.amount, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAssetAmount_lift(_ buf: RustBuffer) throws -> AssetAmount {
+    return try FfiConverterTypeAssetAmount.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAssetAmount_lower(_ value: AssetAmount) -> RustBuffer {
+    return FfiConverterTypeAssetAmount.lower(value)
+}
+
+
 public struct AssetBalanceRequestInfo {
     public var requestId: String
     public var domain: String
@@ -1494,6 +2009,95 @@ public func FfiConverterTypeAssetBalanceRequestInfo_lift(_ buf: RustBuffer) thro
 #endif
 public func FfiConverterTypeAssetBalanceRequestInfo_lower(_ value: AssetBalanceRequestInfo) -> RustBuffer {
     return FfiConverterTypeAssetBalanceRequestInfo.lower(value)
+}
+
+
+/**
+ * A transaction in a script's history, as the host's chain backend has it.
+ */
+public struct ChainTx {
+    /**
+     * The whole transaction, consensus-encoded, hex. Its id is computed
+     * from these bytes, never taken from the backend.
+     */
+    public var transactionHex: String
+    /**
+     * In a block. A mempool transaction belongs in the history too,
+     * unconfirmed: a spend still in the mempool is a spend.
+     */
+    public var confirmed: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The whole transaction, consensus-encoded, hex. Its id is computed
+         * from these bytes, never taken from the backend.
+         */transactionHex: String, 
+        /**
+         * In a block. A mempool transaction belongs in the history too,
+         * unconfirmed: a spend still in the mempool is a spend.
+         */confirmed: Bool) {
+        self.transactionHex = transactionHex
+        self.confirmed = confirmed
+    }
+}
+
+#if compiler(>=6)
+extension ChainTx: Sendable {}
+#endif
+
+
+extension ChainTx: Equatable, Hashable {
+    public static func ==(lhs: ChainTx, rhs: ChainTx) -> Bool {
+        if lhs.transactionHex != rhs.transactionHex {
+            return false
+        }
+        if lhs.confirmed != rhs.confirmed {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(transactionHex)
+        hasher.combine(confirmed)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeChainTx: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ChainTx {
+        return
+            try ChainTx(
+                transactionHex: FfiConverterString.read(from: &buf), 
+                confirmed: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ChainTx, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.transactionHex, into: &buf)
+        FfiConverterBool.write(value.confirmed, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChainTx_lift(_ buf: RustBuffer) throws -> ChainTx {
+    return try FfiConverterTypeChainTx.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChainTx_lower(_ value: ChainTx) -> RustBuffer {
+    return FfiConverterTypeChainTx.lower(value)
 }
 
 
@@ -1780,6 +2384,383 @@ public func FfiConverterTypeContactMatchInfo_lift(_ buf: RustBuffer) throws -> C
 #endif
 public func FfiConverterTypeContactMatchInfo_lower(_ value: ContactMatchInfo) -> RustBuffer {
     return FfiConverterTypeContactMatchInfo.lower(value)
+}
+
+
+public struct ContractCoinInfo {
+    public var txid: String
+    public var vout: UInt32
+    /**
+     * Asset id, hex.
+     */
+    public var assetId: String
+    /**
+     * Base units.
+     */
+    public var amount: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(txid: String, vout: UInt32, 
+        /**
+         * Asset id, hex.
+         */assetId: String, 
+        /**
+         * Base units.
+         */amount: UInt64) {
+        self.txid = txid
+        self.vout = vout
+        self.assetId = assetId
+        self.amount = amount
+    }
+}
+
+#if compiler(>=6)
+extension ContractCoinInfo: Sendable {}
+#endif
+
+
+extension ContractCoinInfo: Equatable, Hashable {
+    public static func ==(lhs: ContractCoinInfo, rhs: ContractCoinInfo) -> Bool {
+        if lhs.txid != rhs.txid {
+            return false
+        }
+        if lhs.vout != rhs.vout {
+            return false
+        }
+        if lhs.assetId != rhs.assetId {
+            return false
+        }
+        if lhs.amount != rhs.amount {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(txid)
+        hasher.combine(vout)
+        hasher.combine(assetId)
+        hasher.combine(amount)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContractCoinInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContractCoinInfo {
+        return
+            try ContractCoinInfo(
+                txid: FfiConverterString.read(from: &buf), 
+                vout: FfiConverterUInt32.read(from: &buf), 
+                assetId: FfiConverterString.read(from: &buf), 
+                amount: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ContractCoinInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.txid, into: &buf)
+        FfiConverterUInt32.write(value.vout, into: &buf)
+        FfiConverterString.write(value.assetId, into: &buf)
+        FfiConverterUInt64.write(value.amount, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractCoinInfo_lift(_ buf: RustBuffer) throws -> ContractCoinInfo {
+    return try FfiConverterTypeContractCoinInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractCoinInfo_lower(_ value: ContractCoinInfo) -> RustBuffer {
+    return FfiConverterTypeContractCoinInfo.lower(value)
+}
+
+
+/**
+ * One record, as a host shows it.
+ */
+public struct ContractRecordInfo {
+    /**
+     * Unique in the book.
+     */
+    public var key: String
+    public var contractId: String
+    /**
+     * "sw/lend/position/v5", "sw/lend/offer/v1", "sw/lend/claim/v1", …
+     */
+    public var kind: String
+    /**
+     * "borrower" or "lender".
+     */
+    public var role: String
+    /**
+     * The site that registered it, as the connect server names it.
+     */
+    public var domain: String
+    /**
+     * The mutable slot as a decimal string, where the kind has one: a
+     * position's remaining debt, the cash an offer still holds.
+     */
+    public var state: String?
+    public var status: ContractStatusInfo
+    /**
+     * Where the contract's money sits.
+     */
+    public var coins: [ContractCoinInfo]
+    /**
+     * The terms, as the kind's canonical JSON object.
+     */
+    public var paramsJson: String
+    /**
+     * The person hid it. It is still held, and still stated.
+     */
+    public var hidden: Bool
+    /**
+     * Unix seconds; 0 when unknown.
+     */
+    public var createdAt: UInt64
+    public var updatedAt: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Unique in the book.
+         */key: String, contractId: String, 
+        /**
+         * "sw/lend/position/v5", "sw/lend/offer/v1", "sw/lend/claim/v1", …
+         */kind: String, 
+        /**
+         * "borrower" or "lender".
+         */role: String, 
+        /**
+         * The site that registered it, as the connect server names it.
+         */domain: String, 
+        /**
+         * The mutable slot as a decimal string, where the kind has one: a
+         * position's remaining debt, the cash an offer still holds.
+         */state: String?, status: ContractStatusInfo, 
+        /**
+         * Where the contract's money sits.
+         */coins: [ContractCoinInfo], 
+        /**
+         * The terms, as the kind's canonical JSON object.
+         */paramsJson: String, 
+        /**
+         * The person hid it. It is still held, and still stated.
+         */hidden: Bool, 
+        /**
+         * Unix seconds; 0 when unknown.
+         */createdAt: UInt64, updatedAt: UInt64) {
+        self.key = key
+        self.contractId = contractId
+        self.kind = kind
+        self.role = role
+        self.domain = domain
+        self.state = state
+        self.status = status
+        self.coins = coins
+        self.paramsJson = paramsJson
+        self.hidden = hidden
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+#if compiler(>=6)
+extension ContractRecordInfo: Sendable {}
+#endif
+
+
+extension ContractRecordInfo: Equatable, Hashable {
+    public static func ==(lhs: ContractRecordInfo, rhs: ContractRecordInfo) -> Bool {
+        if lhs.key != rhs.key {
+            return false
+        }
+        if lhs.contractId != rhs.contractId {
+            return false
+        }
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        if lhs.role != rhs.role {
+            return false
+        }
+        if lhs.domain != rhs.domain {
+            return false
+        }
+        if lhs.state != rhs.state {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.coins != rhs.coins {
+            return false
+        }
+        if lhs.paramsJson != rhs.paramsJson {
+            return false
+        }
+        if lhs.hidden != rhs.hidden {
+            return false
+        }
+        if lhs.createdAt != rhs.createdAt {
+            return false
+        }
+        if lhs.updatedAt != rhs.updatedAt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(key)
+        hasher.combine(contractId)
+        hasher.combine(kind)
+        hasher.combine(role)
+        hasher.combine(domain)
+        hasher.combine(state)
+        hasher.combine(status)
+        hasher.combine(coins)
+        hasher.combine(paramsJson)
+        hasher.combine(hidden)
+        hasher.combine(createdAt)
+        hasher.combine(updatedAt)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContractRecordInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContractRecordInfo {
+        return
+            try ContractRecordInfo(
+                key: FfiConverterString.read(from: &buf), 
+                contractId: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterString.read(from: &buf), 
+                role: FfiConverterString.read(from: &buf), 
+                domain: FfiConverterString.read(from: &buf), 
+                state: FfiConverterOptionString.read(from: &buf), 
+                status: FfiConverterTypeContractStatusInfo.read(from: &buf), 
+                coins: FfiConverterSequenceTypeContractCoinInfo.read(from: &buf), 
+                paramsJson: FfiConverterString.read(from: &buf), 
+                hidden: FfiConverterBool.read(from: &buf), 
+                createdAt: FfiConverterUInt64.read(from: &buf), 
+                updatedAt: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ContractRecordInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.key, into: &buf)
+        FfiConverterString.write(value.contractId, into: &buf)
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterString.write(value.role, into: &buf)
+        FfiConverterString.write(value.domain, into: &buf)
+        FfiConverterOptionString.write(value.state, into: &buf)
+        FfiConverterTypeContractStatusInfo.write(value.status, into: &buf)
+        FfiConverterSequenceTypeContractCoinInfo.write(value.coins, into: &buf)
+        FfiConverterString.write(value.paramsJson, into: &buf)
+        FfiConverterBool.write(value.hidden, into: &buf)
+        FfiConverterUInt64.write(value.createdAt, into: &buf)
+        FfiConverterUInt64.write(value.updatedAt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractRecordInfo_lift(_ buf: RustBuffer) throws -> ContractRecordInfo {
+    return try FfiConverterTypeContractRecordInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractRecordInfo_lower(_ value: ContractRecordInfo) -> RustBuffer {
+    return FfiConverterTypeContractRecordInfo.lower(value)
+}
+
+
+public struct ContractResultInfo {
+    public var contractId: String
+    public var outcome: ContractOutcomeInfo
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(contractId: String, outcome: ContractOutcomeInfo) {
+        self.contractId = contractId
+        self.outcome = outcome
+    }
+}
+
+#if compiler(>=6)
+extension ContractResultInfo: Sendable {}
+#endif
+
+
+extension ContractResultInfo: Equatable, Hashable {
+    public static func ==(lhs: ContractResultInfo, rhs: ContractResultInfo) -> Bool {
+        if lhs.contractId != rhs.contractId {
+            return false
+        }
+        if lhs.outcome != rhs.outcome {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(contractId)
+        hasher.combine(outcome)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContractResultInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContractResultInfo {
+        return
+            try ContractResultInfo(
+                contractId: FfiConverterString.read(from: &buf), 
+                outcome: FfiConverterTypeContractOutcomeInfo.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ContractResultInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.contractId, into: &buf)
+        FfiConverterTypeContractOutcomeInfo.write(value.outcome, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractResultInfo_lift(_ buf: RustBuffer) throws -> ContractResultInfo {
+    return try FfiConverterTypeContractResultInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractResultInfo_lower(_ value: ContractResultInfo) -> RustBuffer {
+    return FfiConverterTypeContractResultInfo.lower(value)
 }
 
 
@@ -3521,6 +4502,386 @@ public func FfiConverterTypeVerifyOutcomeInfo_lower(_ value: VerifyOutcomeInfo) 
 }
 
 
+/**
+ * What the wallet is, for the role check: a role is bound by a script that
+ * is the wallet's or a token the wallet holds, never by the site's word.
+ */
+public struct WalletFacts {
+    /**
+     * Every scriptPubKey the wallet has derived, used or not, hex-encoded.
+     * An address handed to a site long ago and never paid must be among
+     * them.
+     */
+    public var scripts: [String]
+    /**
+     * What the wallet holds, per coin or per asset (amounts of one asset
+     * are added up). A position token or a lender token is held when the
+     * wallet holds exactly one unit of it.
+     */
+    public var balances: [AssetAmount]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Every scriptPubKey the wallet has derived, used or not, hex-encoded.
+         * An address handed to a site long ago and never paid must be among
+         * them.
+         */scripts: [String], 
+        /**
+         * What the wallet holds, per coin or per asset (amounts of one asset
+         * are added up). A position token or a lender token is held when the
+         * wallet holds exactly one unit of it.
+         */balances: [AssetAmount]) {
+        self.scripts = scripts
+        self.balances = balances
+    }
+}
+
+#if compiler(>=6)
+extension WalletFacts: Sendable {}
+#endif
+
+
+extension WalletFacts: Equatable, Hashable {
+    public static func ==(lhs: WalletFacts, rhs: WalletFacts) -> Bool {
+        if lhs.scripts != rhs.scripts {
+            return false
+        }
+        if lhs.balances != rhs.balances {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(scripts)
+        hasher.combine(balances)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWalletFacts: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WalletFacts {
+        return
+            try WalletFacts(
+                scripts: FfiConverterSequenceString.read(from: &buf), 
+                balances: FfiConverterSequenceTypeAssetAmount.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: WalletFacts, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.scripts, into: &buf)
+        FfiConverterSequenceTypeAssetAmount.write(value.balances, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWalletFacts_lift(_ buf: RustBuffer) throws -> WalletFacts {
+    return try FfiConverterTypeWalletFacts.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWalletFacts_lower(_ value: WalletFacts) -> RustBuffer {
+    return FfiConverterTypeWalletFacts.lower(value)
+}
+
+
+/**
+ * Why the host's chain backend gave no history.
+ */
+public enum ChainError: Swift.Error {
+
+    
+    
+    /**
+     * The backend cannot answer now (offline, timed out, overloaded). The
+     * site is told `chain_unavailable` and asks again later; nothing is
+     * refused for good.
+     */
+    case Unavailable(reason: String
+    )
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeChainError: FfiConverterRustBuffer {
+    typealias SwiftType = ChainError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ChainError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .Unavailable(
+            reason: try FfiConverterString.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ChainError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case let .Unavailable(reason):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(reason, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChainError_lift(_ buf: RustBuffer) throws -> ChainError {
+    return try FfiConverterTypeChainError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChainError_lower(_ value: ChainError) -> RustBuffer {
+    return FfiConverterTypeChainError.lower(value)
+}
+
+
+extension ChainError: Equatable, Hashable {}
+
+
+
+
+extension ChainError: Foundation.LocalizedError {
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+}
+
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * How the wallet answered one description.
+ */
+
+public enum ContractOutcomeInfo {
+    
+    /**
+     * Verified and kept as a new record.
+     */
+    case registered
+    /**
+     * Verified, and a record the wallet had moved on (its state or coins).
+     */
+    case updated
+    /**
+     * Verified, and nothing new.
+     */
+    case unchanged
+    /**
+     * Refused: `unknown_kind`, `leaf_mismatch`, `id_mismatch`,
+     * `script_mismatch`, `role_not_bound`, `coin_mismatch`,
+     * `not_explicit`, `chain_unavailable` (the site asks again later),
+     * `not_allowed`, `too_many`.
+     */
+    case rejected(reason: String
+    )
+}
+
+
+#if compiler(>=6)
+extension ContractOutcomeInfo: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContractOutcomeInfo: FfiConverterRustBuffer {
+    typealias SwiftType = ContractOutcomeInfo
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContractOutcomeInfo {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .registered
+        
+        case 2: return .updated
+        
+        case 3: return .unchanged
+        
+        case 4: return .rejected(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ContractOutcomeInfo, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .registered:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .updated:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .unchanged:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .rejected(reason):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(reason, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractOutcomeInfo_lift(_ buf: RustBuffer) throws -> ContractOutcomeInfo {
+    return try FfiConverterTypeContractOutcomeInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractOutcomeInfo_lower(_ value: ContractOutcomeInfo) -> RustBuffer {
+    return FfiConverterTypeContractOutcomeInfo.lower(value)
+}
+
+
+extension ContractOutcomeInfo: Equatable, Hashable {}
+
+
+
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ContractStatusInfo {
+    
+    /**
+     * Approved, the coin not seen on chain yet.
+     */
+    case pending
+    case active
+    /**
+     * Past the kind's cutoff, the coin still unspent.
+     */
+    case expired
+    /**
+     * Over. `path` says how: "exercise", "lapse", "last_look", "fill",
+     * "cancel", "expire", "collect", "sold" or "unknown".
+     */
+    case closed(path: String
+    )
+}
+
+
+#if compiler(>=6)
+extension ContractStatusInfo: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContractStatusInfo: FfiConverterRustBuffer {
+    typealias SwiftType = ContractStatusInfo
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContractStatusInfo {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .pending
+        
+        case 2: return .active
+        
+        case 3: return .expired
+        
+        case 4: return .closed(path: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ContractStatusInfo, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .pending:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .active:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .expired:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .closed(path):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(path, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractStatusInfo_lift(_ buf: RustBuffer) throws -> ContractStatusInfo {
+    return try FfiConverterTypeContractStatusInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContractStatusInfo_lower(_ value: ContractStatusInfo) -> RustBuffer {
+    return FfiConverterTypeContractStatusInfo.lower(value)
+}
+
+
+extension ContractStatusInfo: Equatable, Hashable {}
+
+
+
+
+
+
+
 public enum LcError: Swift.Error {
 
     
@@ -3732,13 +5093,12 @@ public enum WalletEvent {
     /**
      * A relying party describes contracts this wallet is party to but did
      * not sign, for the wallet to verify and keep (covenant positions,
-     * phase 1). The connect server sends it only to an install that
-     * advertised `contracts/1`, and a host advertises that only once it
-     * can verify: the verifier is `lc_wallet_core::contract_registration`,
-     * whose binding here (the wallet's own facts and a chain view handed
-     * across the boundary, and the call that answers) is not built yet.
-     * Until it is, no host of this binding advertises the feature and
-     * this event never arrives.
+     * phase 1). The connect server sends it only to a wallet built with
+     * [`LiquidConnectWallet::new_with_contracts`], which names
+     * `contracts/1`. Decide whether the person lets this domain record
+     * positions in the wallet, then answer with
+     * [`LiquidConnectWallet::register_contracts`]. Nothing in
+     * `contracts_json` is trusted before that call has checked it.
      */
     case registerContractsRequested(request: RegisterContractsRequestInfo
     )
@@ -4114,6 +5474,81 @@ fileprivate struct FfiConverterSequenceUInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeAssetAmount: FfiConverterRustBuffer {
+    typealias SwiftType = [AssetAmount]
+
+    public static func write(_ value: [AssetAmount], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeAssetAmount.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [AssetAmount] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [AssetAmount]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeAssetAmount.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeChainTx: FfiConverterRustBuffer {
+    typealias SwiftType = [ChainTx]
+
+    public static func write(_ value: [ChainTx], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeChainTx.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ChainTx] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ChainTx]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeChainTx.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeContactEntry: FfiConverterRustBuffer {
     typealias SwiftType = [ContactEntry]
 
@@ -4181,6 +5616,81 @@ fileprivate struct FfiConverterSequenceTypeContactMatchInfo: FfiConverterRustBuf
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeContactMatchInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeContractCoinInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [ContractCoinInfo]
+
+    public static func write(_ value: [ContractCoinInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeContractCoinInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ContractCoinInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ContractCoinInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeContractCoinInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeContractRecordInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [ContractRecordInfo]
+
+    public static func write(_ value: [ContractRecordInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeContractRecordInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ContractRecordInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ContractRecordInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeContractRecordInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeContractResultInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [ContractResultInfo]
+
+    public static func write(_ value: [ContractResultInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeContractResultInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ContractResultInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ContractResultInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeContractResultInfo.read(from: &buf))
         }
         return seq
     }
@@ -4326,6 +5836,15 @@ private let initializationResult: InitializationResult = {
     if (uniffi_lc_wallet_ffi_checksum_func_verify_fund_template() != 20986) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lc_wallet_ffi_checksum_method_contractbook_records() != 58186) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_contractbook_to_json() != 24831) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_contractchain_script_history() != 7631) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lc_wallet_ffi_checksum_method_identityservice_contact_address() != 51379) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4392,6 +5911,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_provide_receive_address() != 8495) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_contracts() != 5276) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_fcm_token() != 65529) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4422,13 +5944,23 @@ private let initializationResult: InitializationResult = {
     if (uniffi_lc_wallet_ffi_checksum_method_walleteventlistener_on_event() != 25536) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lc_wallet_ffi_checksum_constructor_contractbook_from_json() != 11093) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_constructor_contractbook_new() != 62464) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lc_wallet_ffi_checksum_constructor_identityservice_new() != 63506) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new() != 29879) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lc_wallet_ffi_checksum_constructor_liquidconnectwallet_new_with_contracts() != 55329) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
+    uniffiCallbackInitContractChain()
     uniffiCallbackInitWalletEventListener()
     return InitializationResult.ok
 }()
