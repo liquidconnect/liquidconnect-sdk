@@ -372,6 +372,11 @@ pub struct ContractRecord {
     /// broadcasts, so an approval is not yet a transaction on chain.
     #[serde(default)]
     pub created_at: u64,
+    /// When a step of the person's last changed the record (unix seconds;
+    /// 0 = unknown): what two copies of a store are merged by (spec §8.3),
+    /// and how long a step the store claims has had to show on chain.
+    #[serde(default)]
+    pub updated_at: u64,
 }
 
 /// Which stored record a transition applies to. The host keys its store
@@ -522,6 +527,7 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
                     state_after: state,
                 }],
                 created_at: 0,
+                updated_at: 0,
             }));
             let claim_params = ContractParams::LendClaimV1 { lender_token: *lender_token };
             out.push(Derived::New(ContractRecord {
@@ -535,6 +541,7 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
                 hidden: false,
                 history: Vec::new(),
                 created_at: 0,
+                updated_at: 0,
             }));
         }
         TypedFund::Exercise {
@@ -721,6 +728,7 @@ fn new_position(params: ContractParams, txid: Txid, domain: &str) -> Derived {
             state_after: Some(buyback),
         }],
         created_at: 0,
+        updated_at: 0,
     })
 }
 
@@ -785,6 +793,7 @@ impl ContractStore {
                     return Vec::new();
                 }
                 record.created_at = now;
+                record.updated_at = now;
                 self.records.insert(key.clone(), record);
                 vec![key]
             }
@@ -820,6 +829,7 @@ impl ContractStore {
                         path: path.clone(),
                         state_after: r.state,
                     });
+                    r.updated_at = now;
                 }
                 keys
             }
@@ -891,36 +901,117 @@ impl ContractStore {
         txids
     }
 
-    /// A record found again from the seed and the chain
-    /// ([`recover_position`], [`recover_claim`]). One the store lacks is
-    /// inserted. One the store had closed as never broadcast is replaced:
-    /// the chain has the transaction, so the wallet's guess was wrong; what
-    /// is the person's (the site's name, the hidden flag) stays. Any other
-    /// record the store holds was kept current by the wallet's own
-    /// approvals and is left alone. Returns the keys that changed.
-    pub fn restore(&mut self, mut record: ContractRecord, now: u64) -> Vec<String> {
+    /// A record as the chain has it — found again from the seed
+    /// ([`recover_position`], [`recover_claim`]) or re-read from its fill
+    /// ([`ContractRecord::as_created`]), and followed to now — meets the
+    /// record the store holds (spec §8.4: the chain is the truth, the store
+    /// is a cache, and the wallet's own approvals run ahead of the chain by
+    /// a block). Returns the keys that changed.
+    ///
+    /// - The store lacks it: inserted.
+    /// - The store closed it as never broadcast: the chain has the
+    ///   transaction after all, so the chain's record replaces it.
+    /// - The chain's record knows more steps: it replaces the store's (a
+    ///   venue's last look, a stale copy that was imported).
+    /// - The same steps, the store still pending, the chain confirmed:
+    ///   active.
+    /// - The steps differ and the store's last change is older than
+    ///   `settle_secs`: a step the wallet approved has had its time to show
+    ///   and did not (the relying party broadcasts; a sale or a buyback can
+    ///   die of a mempool conflict as a fill can), so the chain's record
+    ///   replaces it — unless the chain's reading ends in `unknown`, which
+    ///   never overrules a record that says more.
+    /// - Otherwise the store's record stands: it is the same, or it is
+    ///   ahead by a step that is still on its way.
+    ///
+    /// What is the person's — the site's name, the hidden flag, the day the
+    /// record was made — stays through a replacement.
+    pub fn restore(&mut self, mut record: ContractRecord, now: u64, settle_secs: u64) -> Vec<String> {
         let key = Self::key_of(&record);
+        let Some(held) = self.records.get(&key) else {
+            return self.apply(Derived::New(record), now);
+        };
+        let steps = |r: &ContractRecord| r.history.iter().map(|e| (e.txid, e.path.clone())).collect::<Vec<_>>();
         let never_broadcast = ContractStatus::Closed { path: "not_broadcast".to_owned() };
-        match self.records.get(&key) {
-            None => self.apply(Derived::New(record), now),
-            Some(held) if held.status == never_broadcast => {
-                if record.domain.is_empty() {
-                    record.domain = held.domain.clone();
-                }
-                record.hidden = held.hidden;
-                record.created_at = held.created_at;
-                self.records.insert(key.clone(), record);
-                vec![key]
-            }
-            Some(_) => Vec::new(),
+        let unknown = ContractStatus::Closed { path: "unknown".to_owned() };
+        let same_steps = steps(held) == steps(&record);
+        if same_steps && held.status == ContractStatus::Pending && record.status == ContractStatus::Active {
+            let r = self.records.get_mut(&key).expect("held above");
+            r.status = ContractStatus::Active;
+            return vec![key];
         }
+        let settled = held.updated_at > 0 && now.saturating_sub(held.updated_at) > settle_secs;
+        // A reading without steps (a claim script's lookup) says nothing
+        // about the steps the store recorded.
+        let reads_steps = !record.history.is_empty();
+        let replace = held.status == never_broadcast
+            || record.history.len() > held.history.len()
+            || (reads_steps && !same_steps && settled && record.status != unknown);
+        if !replace {
+            return Vec::new();
+        }
+        if record.domain.is_empty() {
+            record.domain = held.domain.clone();
+        }
+        record.hidden = held.hidden;
+        record.created_at = held.created_at;
+        record.updated_at = now;
+        self.records.insert(key.clone(), record);
+        vec![key]
     }
 
-    /// True for a record a rescan has nothing to add to: every one but
-    /// those closed as never broadcast, which the chain may contradict.
-    pub fn is_settled(&self, key: &str) -> bool {
+    /// The borrower positions a host re-reads from the chain at a rescan,
+    /// each as its fill created it ([`ContractRecord::as_created`], status
+    /// pending until the host says the fill is confirmed): every live one,
+    /// every one closed as never broadcast, and every one the person's own
+    /// step closed within [`RESCAN_WINDOW_SECS`] — a step the wallet
+    /// approved may have died before it reached the chain. The host follows
+    /// each ([`follow_position`]) and hands the result to [`Self::restore`].
+    pub fn rescan_candidates(&self, now: u64) -> Vec<ContractRecord> {
         let never_broadcast = ContractStatus::Closed { path: "not_broadcast".to_owned() };
-        self.records.get(key).is_some_and(|r| r.status != never_broadcast)
+        self.records
+            .values()
+            .filter(|r| match &r.status {
+                ContractStatus::Closed { .. } if r.status != never_broadcast => {
+                    r.updated_at > 0 && now.saturating_sub(r.updated_at) <= RESCAN_WINDOW_SECS
+                }
+                _ => true,
+            })
+            .filter_map(ContractRecord::as_created)
+            .collect()
+    }
+
+    /// Two copies of one wallet's records become one (spec §8.3): an
+    /// imported export, another install's store. A record only `other` has
+    /// is taken as it is. Of a record both have, the one the person's step
+    /// changed last wins (`updated_at`; without one, the longer history),
+    /// and this store's copy stands on a tie. The hidden flag is this
+    /// install's. A host runs its rescan afterwards: both copies may be
+    /// behind the chain. Returns the keys added and the keys replaced.
+    pub fn merge(&mut self, other: ContractStore) -> (Vec<String>, Vec<String>) {
+        let (mut added, mut replaced) = (Vec::new(), Vec::new());
+        for (_, mut theirs) in other.records {
+            // The key is recomputed, never taken from the copy.
+            let key = Self::key_of(&theirs);
+            match self.records.get(&key) {
+                None => {
+                    self.records.insert(key.clone(), theirs);
+                    added.push(key);
+                }
+                Some(ours) => {
+                    let newer = match (ours.updated_at, theirs.updated_at) {
+                        (0, _) | (_, 0) => theirs.history.len() > ours.history.len(),
+                        (a, b) => b > a,
+                    };
+                    if newer {
+                        theirs.hidden = ours.hidden;
+                        self.records.insert(key.clone(), theirs);
+                        replaced.push(key);
+                    }
+                }
+            }
+        }
+        (added, replaced)
     }
 
     /// A record past its cutoff with its coin still unspent, as of `tip`.
@@ -1001,6 +1092,30 @@ pub const NOTE_TAG_POSITION_V4: u8 = 0x02;
 /// never coincide.
 pub const NOTE_KEY_PURPOSE: u32 = 0x4C4E;
 
+/// `m/19534'/<network>'/<index>'` from the wallet seed (the BIP39 seed
+/// bytes): index 0 the note key, index 1 the export key.
+fn contracts_secret(seed: &[u8], network: Network, index: u32) -> anyhow::Result<[u8; 32]> {
+    let secp = Secp256k1::signing_only();
+    // NetworkKind only selects xprv serialization bytes, which never
+    // leave this function; network separation is the path's job.
+    let master = Xpriv::new_master(NetworkKind::Main, seed)?;
+    let path = [
+        ChildNumber::from_hardened_idx(NOTE_KEY_PURPOSE).expect("fits 31 bits"),
+        ChildNumber::from_hardened_idx(network_index(network)).expect("fits 31 bits"),
+        ChildNumber::from_hardened_idx(index).expect("fits 31 bits"),
+    ];
+    let child = master.derive_priv(&secp, &path)?;
+    Ok(child.private_key.secret_bytes())
+}
+
+fn network_index(network: Network) -> u32 {
+    match network {
+        Network::Liquid => 0,
+        Network::LiquidTestnet => 1,
+        Network::Regtest => 2,
+    }
+}
+
 /// The key the note is sealed under: a 32-byte secret derived from the
 /// SEED on a dedicated hardened path (spend tier), never from the master
 /// blinding key, which travels inside the descriptor to the connect server
@@ -1012,22 +1127,7 @@ impl NoteKey {
     /// The production derivation: BIP32 from the wallet seed (the BIP39
     /// seed bytes), hardened path `m/19534'/<network>'/0'`.
     pub fn from_seed(seed: &[u8], network: Network) -> anyhow::Result<NoteKey> {
-        let secp = Secp256k1::signing_only();
-        // NetworkKind only selects xprv serialization bytes, which never
-        // leave this function; network separation is the path's job.
-        let master = Xpriv::new_master(NetworkKind::Main, seed)?;
-        let net = match network {
-            Network::Liquid => 0,
-            Network::LiquidTestnet => 1,
-            Network::Regtest => 2,
-        };
-        let path = [
-            ChildNumber::from_hardened_idx(NOTE_KEY_PURPOSE).expect("fits 31 bits"),
-            ChildNumber::from_hardened_idx(net).expect("fits 31 bits"),
-            ChildNumber::from_hardened_idx(0).expect("fits 31 bits"),
-        ];
-        let child = master.derive_priv(&secp, &path)?;
-        Ok(NoteKey(child.private_key.secret_bytes()))
+        Ok(NoteKey(contracts_secret(seed, network, 0)?))
     }
 
     /// A key from a secret the host derived itself (tests, hosts with
@@ -1268,7 +1368,43 @@ pub fn recover_position(key: &NoteKey, own: &OwnTx<'_>, domain: &str) -> Option<
             state_after: Some(buyback),
         }],
         created_at: 0,
+        updated_at: 0,
     })
+}
+
+/// How long after the person's own step closed a position a rescan still
+/// re-reads it from the chain ([`ContractStore::rescan_candidates`]).
+pub const RESCAN_WINDOW_SECS: u64 = 7 * 86_400;
+
+impl ContractRecord {
+    /// A borrower position as its fill created it — the full debt, the coin
+    /// at the fill's output 0, one event — for a host that re-reads the
+    /// chain from there ([`follow_position`]). The status is pending until
+    /// the host says the fill is confirmed. `None` for any other record:
+    /// an offer and a claim have no such beginning to return to.
+    pub fn as_created(&self) -> Option<ContractRecord> {
+        if self.role != Role::Borrower {
+            return None;
+        }
+        let t = self.params.position()?;
+        let fill = self.history.first().filter(|e| e.path == "fill")?;
+        Some(ContractRecord {
+            state: Some(t.buyback),
+            coins: vec![ContractCoin {
+                outpoint: OutPoint::new(fill.txid, FILL_POSITION_OUTPUT as u32),
+                asset: t.collateral,
+                amount: t.size,
+            }],
+            status: ContractStatus::Pending,
+            history: vec![fill.clone()],
+            ..self.clone()
+        })
+    }
+
+    /// The transaction that created the record, where it has one.
+    pub fn created_by(&self) -> Option<Txid> {
+        self.history.first().map(|e| e.txid)
+    }
 }
 
 /// The wallet's own history as the follow step reads it.
@@ -1324,21 +1460,26 @@ fn close_record(record: &mut ContractRecord, txid: Txid, path: &str, coin_spent:
 /// §6.3, no witness parsing). A lapse pays the borrower nothing, so it is in
 /// the history only of a wallet that is the lender as well; otherwise the
 /// record stays open here and expires by height.
-pub fn follow_position(record: &mut ContractRecord, history: &dyn OwnHistory) {
+///
+/// `false` when this is not a record the rules can read (not a borrower's
+/// position, or one whose lender is not paid at the claim script of its
+/// token): the record is untouched, and "could not follow" must not be
+/// taken for "nothing happened".
+pub fn follow_position(record: &mut ContractRecord, history: &dyn OwnHistory) -> bool {
     if record.role != Role::Borrower {
-        return;
+        return false;
     }
     let Some(t) = record.params.position().cloned() else {
-        return;
+        return false;
     };
     let Some(fill) = record.history.first().map(|e| e.txid) else {
-        return;
+        return false;
     };
     // Every position since v3 pays the claim script of its lender token;
     // without that there is no script to read a payment at.
     let claim = claim_script(t.lender_nft);
     if script_hash(&claim) != t.payout {
-        return;
+        return false;
     }
     let mut token_at = Some(OutPoint::new(fill, FILL_BORROWER_NFT_OUTPUT as u32));
     for _ in 0..MAX_FOLLOW_STEPS {
@@ -1410,6 +1551,7 @@ pub fn follow_position(record: &mut ContractRecord, history: &dyn OwnHistory) {
             });
         }
     }
+    true
 }
 
 /// Spec §8.1 step 3: the coins waiting at a lender token's claim script,
@@ -1466,7 +1608,160 @@ pub fn recover_claim(lender_token: AssetId, history: &[elements::Transaction], d
         hidden: false,
         history: Vec::new(),
         created_at: 0,
+        updated_at: 0,
     })
+}
+
+// ---------------------------------------------------------------------------
+// The export (spec §8.3, §11.4): the wallet's records as one line of text
+// the person keeps — a file, a paste, a QR when it is small — which depends
+// on nobody. It carries what the chain does not say: an open offer's rows,
+// the site each record came from, hidden flags, history, and every record
+// of a wallet that writes no notes. Opened with the seed it is also what a
+// command-line tool needs to build a buyback or a collection.
+
+/// First field of an export: the format and its version.
+pub const EXPORT_PREFIX: &str = "LCPOS1";
+
+/// The key an export is sealed under: seed-derived on the note key's
+/// purpose, index 1 (`m/19534'/<network>'/1'`). Spend tier for the note's
+/// reason: the master blinding key travels inside the descriptor to the
+/// connect server and to any watch-only service, and a file sealed under a
+/// key derived from it would be theirs to read. A hardware wallet has no
+/// seed in software and therefore no export yet.
+#[derive(Clone)]
+pub struct ExportKey([u8; 32]);
+
+impl ExportKey {
+    pub fn from_seed(seed: &[u8], network: Network) -> anyhow::Result<ExportKey> {
+        Ok(ExportKey(contracts_secret(seed, network, 1)?))
+    }
+
+    /// A key from a secret the host derived itself (tests, hosts with
+    /// their own derivation scheme): spend tier, derivable after a restore.
+    pub fn from_secret(secret: [u8; 32]) -> ExportKey {
+        ExportKey(secret)
+    }
+}
+
+impl std::fmt::Debug for ExportKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ExportKey(..)")
+    }
+}
+
+fn network_name(network: Network) -> &'static str {
+    match network {
+        Network::Liquid => "liquid",
+        Network::LiquidTestnet => "liquidtestnet",
+        Network::Regtest => "regtest",
+    }
+}
+
+/// Why an import was refused, in words a host can show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportError {
+    /// Not an export at all, or of a version this SDK does not read.
+    NotAnExport,
+    /// An export of another network's wallet.
+    WrongNetwork { found: String },
+    /// Sealed under another seed, or altered since it was written.
+    WrongWallet,
+    /// Opened, but what is inside is not a store of records.
+    Corrupt(String),
+}
+
+impl std::fmt::Display for ImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImportError::NotAnExport => f.write_str("this is not a Liquid Connect positions export"),
+            ImportError::WrongNetwork { found } => write!(f, "this export is from a {found} wallet"),
+            ImportError::WrongWallet => f.write_str("this export belongs to another wallet, or it was altered"),
+            ImportError::Corrupt(what) => write!(f, "this export cannot be read: {what}"),
+        }
+    }
+}
+
+impl std::error::Error for ImportError {}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ExportBody {
+    exported_at: u64,
+    store: ContractStore,
+}
+
+/// The store as an export: `LCPOS1.<network>.<base64url>`, the payload a
+/// random 12-byte nonce followed by the ChaCha20-Poly1305 ciphertext of the
+/// store's JSON, with the first two fields as associated data — so a file
+/// cannot be relabelled for another network or version. One line, no
+/// padding, safe to paste.
+pub fn export_store(store: &ContractStore, key: &ExportKey, network: Network, now: u64) -> anyhow::Result<String> {
+    use base64::Engine as _;
+    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+    let header = format!("{EXPORT_PREFIX}.{}", network_name(network));
+    let body = serde_json::to_vec(&ExportBody {
+        exported_at: now,
+        store: store.clone(),
+    })?;
+    let nonce: [u8; 12] = rand::random();
+    let cipher = chacha20poly1305::ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(&key.0));
+    let sealed = cipher
+        .encrypt(
+            chacha20poly1305::Nonce::from_slice(&nonce),
+            Payload {
+                msg: &body,
+                aad: header.as_bytes(),
+            },
+        )
+        .map_err(|_| anyhow::anyhow!("sealing the export failed"))?;
+    let mut payload = nonce.to_vec();
+    payload.extend_from_slice(&sealed);
+    Ok(format!("{header}.{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload)))
+}
+
+/// An export opened with this wallet's key: the records as they were
+/// written and when. Every record is checked to be what its id says before
+/// it is returned; the host merges it ([`ContractStore::merge`]) and runs
+/// its rescan, because the copy may be behind the chain.
+pub fn import_store(text: &str, key: &ExportKey, network: Network) -> Result<(ContractStore, u64), ImportError> {
+    use base64::Engine as _;
+    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+    let text: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut fields = text.splitn(3, '.');
+    let (Some(prefix), Some(found), Some(payload)) = (fields.next(), fields.next(), fields.next()) else {
+        return Err(ImportError::NotAnExport);
+    };
+    if prefix != EXPORT_PREFIX {
+        return Err(ImportError::NotAnExport);
+    }
+    if found != network_name(network) {
+        return Err(ImportError::WrongNetwork { found: found.to_owned() });
+    }
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| ImportError::NotAnExport)?;
+    if payload.len() < 12 + 16 {
+        return Err(ImportError::NotAnExport);
+    }
+    let (nonce, sealed) = payload.split_at(12);
+    let header = format!("{prefix}.{found}");
+    let cipher = chacha20poly1305::ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(&key.0));
+    let body = cipher
+        .decrypt(
+            chacha20poly1305::Nonce::from_slice(nonce),
+            Payload {
+                msg: sealed,
+                aad: header.as_bytes(),
+            },
+        )
+        .map_err(|_| ImportError::WrongWallet)?;
+    let body: ExportBody = serde_json::from_slice(&body).map_err(|e| ImportError::Corrupt(e.to_string()))?;
+    for record in body.store.records.values() {
+        if record.contract_id != record.params.contract_id() {
+            return Err(ImportError::Corrupt("a record is not the contract its id names".to_owned()));
+        }
+    }
+    Ok((body.store, body.exported_at))
 }
 
 // ---------------------------------------------------------------------------
@@ -2250,6 +2545,7 @@ mod tests {
             hidden: false,
             history: Vec::new(),
             created_at: 0,
+            updated_at: 0,
         };
         let mut store = ContractStore::default();
         assert_eq!(store.apply(Derived::New(record(claim.clone(), vec![])), 1).len(), 1);
@@ -2647,8 +2943,25 @@ mod tests {
         assert_eq!(store.set_claim_coins(token, vec![waiting.clone()]), vec![key.clone()]);
         assert!(store.set_claim_coins(token, vec![waiting.clone()]).is_empty());
         assert!(store.set_claim_coins(asset(NFT), vec![waiting.clone()]).is_empty());
-        assert_eq!(store.get(&key).unwrap().coins, vec![waiting]);
+        assert_eq!(store.get(&key).unwrap().coins, vec![waiting.clone()]);
         assert_eq!(store.get(&key).unwrap().render("", ""), "What your lending paid: 1 coin waiting · collect with your lender token · active");
+        // A later lookup never replaces the record, however old its last
+        // step: a lookup reads coins, not the collections the store recorded.
+        store.apply(
+            Derived::Transition {
+                select: Select::ClaimByToken(token),
+                txid: collect.txid(),
+                path: "collect".to_owned(),
+                state: None,
+                coins: None,
+                coins_removed: Vec::new(),
+                status: None,
+            },
+            2,
+        );
+        let looked_up = recover_claim(token, &[exercise.clone(), lapse.clone(), collect.clone()], "").unwrap();
+        assert!(store.restore(looked_up, 99_999_999, 3_600).is_empty());
+        assert_eq!(store.get(&key).unwrap().history.len(), 1);
     }
 
     /// A phone is in the background seconds after an approval, and by the
@@ -2663,8 +2976,6 @@ mod tests {
         let mut store = ContractStore::default();
         let k = store.apply(Derived::New(waiting.clone()), 10_000).remove(0);
         assert_eq!(store.pending_txids(), vec![fill.txid()]);
-        assert!(!store.is_settled("nope"));
-        assert!(store.is_settled(&k));
 
         // Another transaction missing says nothing about this record; nor does youth.
         let other = elements::Txid::from_str(&"ee".repeat(32)).unwrap();
@@ -2678,26 +2989,174 @@ mod tests {
         // The history lacks it and the hour has passed: never reached the chain.
         assert_eq!(store.fail_stale_pending_txid(&fill.txid(), 10_000 + 3_601, 3_600), vec![k.clone()]);
         assert!(store.pending_txids().is_empty());
-        assert!(!store.is_settled(&k));
         store.set_hidden(&k, true);
+        // Closed as never broadcast, it is still re-read at a rescan.
+        assert_eq!(store.rescan_candidates(99_999).len(), 1);
 
         // A rescan that finds the fill on chain after all puts the record
         // right and keeps what is the person's; a live record is left alone.
         let found = recover_position(&key(), &OwnTx { tx: &fill, confirmed: true, own_assets: &own_assets }, "").unwrap();
-        assert_eq!(store.restore(found.clone(), 20_000), vec![k.clone()]);
+        assert_eq!(store.restore(found.clone(), 20_000, 3_600), vec![k.clone()]);
         let r = store.get(&k).unwrap();
         assert_eq!(r.status, ContractStatus::Active);
         assert_eq!(r.coins, found.coins);
         assert_eq!(r.domain, "paper.swaption.io");
         assert!(r.hidden);
         assert_eq!(r.created_at, 10_000);
-        assert!(store.is_settled(&k));
-        assert!(store.restore(found.clone(), 30_000).is_empty());
+        assert_eq!(r.updated_at, 20_000);
+        assert!(store.restore(found.clone(), 30_000, 3_600).is_empty());
+        // A pending record the chain has confirmed turns active on the rescan alone.
+        assert_eq!(seen.get(&k).unwrap().status, ContractStatus::Active);
+        let mut away = ContractStore::default();
+        away.apply(Derived::New(waiting), 10_000);
+        assert_eq!(away.restore(found.clone(), 10_060, 3_600), vec![k.clone()]);
+        assert_eq!(away.get(&k).unwrap().status, ContractStatus::Active);
+        assert_eq!(away.get(&k).unwrap().domain, "paper.swaption.io");
         // And a store that never had it takes it as found.
         let mut empty = ContractStore::default();
-        assert_eq!(empty.restore(found, 40_000), vec![k.clone()]);
+        assert_eq!(empty.restore(found, 40_000, 3_600), vec![k.clone()]);
         assert_eq!(empty.get(&k).unwrap().domain, "");
         assert_eq!(empty.get(&k).unwrap().created_at, 40_000);
+    }
+
+    /// The chain is the truth and the store is a cache, but the wallet's
+    /// own approvals run ahead of the chain by a block: which record stands
+    /// when a rescan's reading meets the store's.
+    #[test]
+    fn a_rescan_wins_where_it_knows_more_and_where_a_step_never_showed() {
+        let (fill, _) = noted_v4_fill();
+        let own_assets = [asset(USDT)];
+        let created = recover_position(&key(), &OwnTx { tx: &fill, confirmed: true, own_assets: &own_assets }, "paper.swaption.io").unwrap();
+        let params = created.params.clone();
+        let half = 621_00000000u64;
+        let partial = buyback(&params, fill.txid(), 1, 0, half, half);
+        let mut store = ContractStore::default();
+        let k = store.apply(Derived::New(created.clone()), 1_000).remove(0);
+
+        // What the store re-reads from: the record as its fill created it.
+        let again = store.rescan_candidates(2_000);
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].status, ContractStatus::Pending);
+        assert_eq!(again[0].coins, created.coins);
+        assert_eq!(again[0].state, Some(1_242_00000000));
+        assert_eq!(again[0].domain, "paper.swaption.io");
+        assert_eq!(again[0].created_by(), Some(fill.txid()));
+
+        // The chain knows a step the store does not (a stale copy, a
+        // venue's last look): the chain's record replaces it at once.
+        let mut followed = created.clone();
+        assert!(follow_position(&mut followed, &History(vec![partial.clone()])));
+        assert_eq!(store.restore(followed.clone(), 2_000, 3_600), vec![k.clone()]);
+        assert_eq!(store.get(&k).unwrap().state, Some(half));
+        assert_eq!(store.get(&k).unwrap().updated_at, 2_000);
+        assert!(store.restore(followed.clone(), 3_000, 3_600).is_empty());
+
+        // The store is ahead by a step the wallet has just approved (a sale
+        // whose transaction is on its way): the store's record stands…
+        let sale_txid = elements::Txid::from_str(&"5a".repeat(32)).unwrap();
+        store.apply(
+            Derived::Transition {
+                select: Select::PositionByBorrowerNft(asset(NFT)),
+                txid: sale_txid,
+                path: "sold".to_owned(),
+                state: None,
+                coins: None,
+                coins_removed: Vec::new(),
+                status: Some(ContractStatus::Closed { path: "sold".to_owned() }),
+            },
+            10_000,
+        );
+        assert!(store.restore(followed.clone(), 10_000 + 3_600, 3_600).is_empty());
+        assert_eq!(store.get(&k).unwrap().status, ContractStatus::Closed { path: "sold".to_owned() });
+        // …it is re-read while the step is young, and once the step has had
+        // its hour without showing, the chain's record takes its place: the
+        // sale died, the position is still the person's to buy back.
+        assert_eq!(store.rescan_candidates(10_000 + RESCAN_WINDOW_SECS).len(), 1);
+        assert!(store.rescan_candidates(10_000 + RESCAN_WINDOW_SECS + 1).is_empty());
+        assert_eq!(store.restore(followed.clone(), 10_000 + 3_601, 3_600), vec![k.clone()]);
+        assert_eq!(store.get(&k).unwrap().status, ContractStatus::Active);
+        assert_eq!(store.get(&k).unwrap().history.len(), 2);
+
+        // A reading that ends in `unknown` never overrules a record that says more.
+        let mut vague = followed.clone();
+        vague.history[1].path = "unknown".to_owned();
+        vague.status = ContractStatus::Closed { path: "unknown".to_owned() };
+        assert!(store.restore(vague, 99_999_999, 3_600).is_empty());
+
+        // An offer and a claim have no beginning to return to; nor has a lender's position.
+        let claim = recover_claim(asset(LENDER_TOKEN), &[partial], "").unwrap();
+        assert!(claim.as_created().is_none());
+        let mut lender_side = created.clone();
+        lender_side.role = Role::Lender;
+        assert!(lender_side.as_created().is_none());
+        assert!(!follow_position(&mut lender_side, &History(vec![])));
+    }
+
+    #[test]
+    fn an_export_opens_only_with_its_own_wallet_and_network_and_merges_by_the_last_step() {
+        let (fill, _) = noted_v4_fill();
+        let own_assets = [asset(USDT)];
+        let record = recover_position(&key(), &OwnTx { tx: &fill, confirmed: true, own_assets: &own_assets }, "paper.swaption.io").unwrap();
+        let mut store = ContractStore::default();
+        let k = store.apply(Derived::New(record.clone()), 1_000).remove(0);
+        store.set_hidden(&k, true);
+
+        let seed = [3u8; 64];
+        let export_key = ExportKey::from_seed(&seed, Network::LiquidTestnet).unwrap();
+        // Its own key: not the note key of the same seed, not another network's.
+        assert_ne!(export_key.0, NoteKey::from_seed(&seed, Network::LiquidTestnet).unwrap().0);
+        assert_ne!(export_key.0, ExportKey::from_seed(&seed, Network::Liquid).unwrap().0);
+
+        let text = export_store(&store, &export_key, Network::LiquidTestnet, 5_000).unwrap();
+        assert!(text.starts_with("LCPOS1.liquidtestnet."), "{text}");
+        assert!(!text.contains(char::is_whitespace) && !text.contains('='), "{text}");
+        assert!(!text.contains("paper.swaption.io"));
+        // Sealed with a fresh nonce every time.
+        assert_ne!(text, export_store(&store, &export_key, Network::LiquidTestnet, 5_000).unwrap());
+
+        // It comes back whole, through whatever a paste adds.
+        let pasted = format!("  {}\n{}\r\n", &text[..40], &text[40..]);
+        let (back, exported_at) = import_store(&pasted, &export_key, Network::LiquidTestnet).unwrap();
+        assert_eq!(back, store);
+        assert_eq!(exported_at, 5_000);
+
+        // Another seed, another network's wallet, a relabelled or altered file, junk: refused in words.
+        let other = ExportKey::from_secret([9u8; 32]);
+        assert_eq!(import_store(&text, &other, Network::LiquidTestnet).unwrap_err(), ImportError::WrongWallet);
+        assert_eq!(
+            import_store(&text, &export_key, Network::Liquid).unwrap_err(),
+            ImportError::WrongNetwork { found: "liquidtestnet".to_owned() }
+        );
+        let relabelled = text.replacen("liquidtestnet", "liquid", 1);
+        assert_eq!(import_store(&relabelled, &export_key, Network::Liquid).unwrap_err(), ImportError::WrongWallet);
+        let mut altered: Vec<char> = text.chars().collect();
+        let i = altered.len() - 10;
+        altered[i] = if altered[i] == 'A' { 'B' } else { 'A' };
+        let altered: String = altered.into_iter().collect();
+        assert_eq!(import_store(&altered, &export_key, Network::LiquidTestnet).unwrap_err(), ImportError::WrongWallet);
+        assert_eq!(import_store("liquidconnect://login?x=1", &export_key, Network::LiquidTestnet).unwrap_err(), ImportError::NotAnExport);
+        assert_eq!(import_store("LCPOS2.liquidtestnet.AAAA", &export_key, Network::LiquidTestnet).unwrap_err(), ImportError::NotAnExport);
+        assert_eq!(import_store("LCPOS1.liquidtestnet.AAAA", &export_key, Network::LiquidTestnet).unwrap_err(), ImportError::NotAnExport);
+        assert_eq!(ImportError::WrongWallet.to_string(), "this export belongs to another wallet, or it was altered");
+
+        // Merging: a record only the copy has is taken as it is…
+        let mut fresh = ContractStore::default();
+        assert_eq!(fresh.merge(back.clone()), (vec![k.clone()], vec![]));
+        assert_eq!(fresh, store);
+        // …of a record both have, the one the person's step changed last
+        // wins, this install's hidden flag stays, and a tie changes nothing.
+        assert_eq!(fresh.merge(back.clone()), (vec![], vec![]));
+        let mut newer = back.clone();
+        {
+            let r = newer.records.get_mut(&k).unwrap();
+            r.status = ContractStatus::Closed { path: "sold".to_owned() };
+            r.updated_at = 9_000;
+            r.hidden = false;
+        }
+        assert_eq!(fresh.merge(newer), (vec![], vec![k.clone()]));
+        assert_eq!(fresh.get(&k).unwrap().status, ContractStatus::Closed { path: "sold".to_owned() });
+        assert!(fresh.get(&k).unwrap().hidden);
+        assert_eq!(fresh.merge(back), (vec![], vec![]));
     }
 
     // -----------------------------------------------------------------------
