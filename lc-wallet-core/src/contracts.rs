@@ -100,7 +100,7 @@ fn tagged(tag: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     sha256::Hash::from_engine(e).to_byte_array()
 }
 
-fn script_hash(script: &Script) -> [u8; 32] {
+pub(crate) fn script_hash(script: &Script) -> [u8; 32] {
     sha256::Hash::hash(script.as_bytes()).to_byte_array()
 }
 
@@ -1417,7 +1417,7 @@ pub trait OwnHistory {
 /// answers in circles.
 const MAX_FOLLOW_STEPS: usize = 256;
 
-fn explicit_txout(out: &elements::TxOut) -> Option<(AssetId, u64)> {
+pub(crate) fn explicit_txout(out: &elements::TxOut) -> Option<(AssetId, u64)> {
     use elements::confidential::{Asset, Value};
     match (out.asset, out.value) {
         (Asset::Explicit(a), Value::Explicit(v)) => Some((a, v)),

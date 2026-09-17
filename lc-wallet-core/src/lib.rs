@@ -18,6 +18,10 @@
 //! - [`contracts`] — wallet-held covenant positions: records derived
 //!   from the wallet's own typed fund approvals, the encrypted note that
 //!   makes them recoverable from the seed, and their rendering.
+//! - [`contract_registration`] — contracts the wallet did not sign: a
+//!   relying party's description verified against the wallet's own facts
+//!   and the chain before anything is stored, and the wallet's statement
+//!   of what it holds.
 //! - [`lending`] — Swaption lending: typed `sw/lend/*` fund claims
 //!   checked against the template rows the wallet can read itself.
 //!
@@ -31,6 +35,7 @@
 //! [`sideswap-io/sideswap_rust`]: https://github.com/sideswap-io/sideswap_rust
 
 pub mod approval;
+pub mod contract_registration;
 pub mod contracts;
 pub mod core;
 pub mod identity;
