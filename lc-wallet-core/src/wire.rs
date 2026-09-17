@@ -368,6 +368,9 @@ pub enum UserAction {
     /// changes. Empty = the wallet holds nothing of this domain (a wallet
     /// restored from its seed says exactly that, and the relying party
     /// registers again). `as_of` is unix milliseconds; the newest wins.
+    /// The connect server keeps it only while the wallet has a session with
+    /// `domain` and refuses it otherwise, so the core says it again when a
+    /// session with the domain is created.
     ReportContracts {
         domain: String,
         contracts: Vec<crate::contract_registration::ContractEntry>,

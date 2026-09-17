@@ -587,9 +587,18 @@ impl WalletConnectCore {
     fn handle_notification(&mut self, notif: wire::Notif, effects: &mut Vec<Effect>) {
         match notif {
             wire::Notif::SessionCreated(notif) => {
+                // The connect server keeps a statement only while the
+                // wallet has a session with the domain, and refuses one for
+                // a domain it has none with. A new session is therefore
+                // when that domain's relying party can first be told what
+                // the wallet holds: say it again, or a site the person
+                // connects to a second time reads "nothing stated" and
+                // registers everything anew.
+                let domain = notif.session.domain.clone();
                 effects.push(Effect::SessionCreated {
                     session: notif.session,
                 });
+                self.send_statement(&domain, effects);
             }
 
             wire::Notif::SessionRemoved(notif) => {
@@ -1829,6 +1838,25 @@ mod tests {
         let stated = statements(&frames);
         assert_eq!(stated.len(), 1);
         assert!(stated[0].contains(r#""as_of":2000"#), "{}", stated[0]);
+        // The server keeps a statement only while a session with the domain
+        // exists, so a session created with that domain is when its relying
+        // party can first be told: said again, for that domain and no other.
+        let session_created = |domain: &str| Input::Transport {
+            event: TransportEvent::Recv {
+                text: format!(
+                    r#"{{"Notif":{{"notif":{{"SessionCreated":{{"session":{{"session_id":"s1","domain":"{domain}","is_local":true}}}}}}}}}}"#
+                ),
+            },
+        };
+        let effects = core.handle(session_created("paper.swaption.io"));
+        assert!(effects.iter().any(|e| matches!(e, Effect::SessionCreated { .. })));
+        let frames = sent_frames(&effects);
+        let stated = statements(&frames);
+        assert_eq!(stated.len(), 1);
+        assert!(stated[0].contains(r#""domain":"paper.swaption.io""#), "{}", stated[0]);
+        assert!(stated[0].contains(r#""as_of":2000"#), "{}", stated[0]);
+        let effects = core.handle(session_created("other.example.com"));
+        assert!(statements(&sent_frames(&effects)).is_empty());
 
         // A relying party's description reaches the host…
         let effects = core.handle(Input::Transport {
