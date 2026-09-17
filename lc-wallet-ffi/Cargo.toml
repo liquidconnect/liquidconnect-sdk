@@ -16,6 +16,12 @@ tokio.workspace = true
 thiserror = "1"
 anyhow.workspace = true
 hex = "0.4"
+# Contracts the wallet did not sign: transactions and scripts decoded on this
+# side of the boundary, the book saved as JSON. All three are already in the
+# lock file through lc-wallet-core.
+elements = "0.25.3"
+serde_json.workspace = true
+log = "0.4"
 
 [features]
 cli = ["uniffi/cli"]

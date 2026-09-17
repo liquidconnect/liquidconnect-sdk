@@ -57,8 +57,10 @@ pub enum WalletEvent {
     FundRequestRemoved { request_id: String },
 
     /// A relying party describes contracts for the wallet to verify and
-    /// keep (`contract_registration::register_all`), answered through
-    /// `Input::ContractsRegistered`. Normally nothing is shown.
+    /// keep (`contract_registration::register_all`), answered with
+    /// [`WalletConnect::answer_register_contracts`]. Normally nothing is
+    /// shown. Sent only to a host that names `contracts/1`
+    /// ([`WalletConnect::spawn_with_features`]).
     RegisterContractsRequested(wire::RegisterContractsRequest),
     RegisterContractsRequestRemoved { request_id: String },
 
@@ -93,9 +95,21 @@ pub struct WalletConnect {
 
 impl WalletConnect {
     pub fn spawn(config: WalletConnectConfig) -> (Self, mpsc::UnboundedReceiver<WalletEvent>) {
+        Self::spawn_with_features(config, Vec::new())
+    }
+
+    /// The same, for a host that supports more than the base protocol:
+    /// `features` as `name/version` strings, stated at every login
+    /// ([`WalletConnectCore::with_features`]). Name `contracts/1` only when
+    /// the host answers every registration and states what it holds to
+    /// every site it is connected to.
+    pub fn spawn_with_features(
+        config: WalletConnectConfig,
+        features: Vec<String>,
+    ) -> (Self, mpsc::UnboundedReceiver<WalletEvent>) {
         let (input_tx, input_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        tokio::spawn(run(config, input_rx, event_tx));
+        tokio::spawn(run(config, features, input_rx, event_tx));
         (WalletConnect { input_tx }, event_rx)
     }
 
@@ -244,6 +258,46 @@ impl WalletConnect {
         });
     }
 
+    /// Answer a registration request with what the wallet found, one result
+    /// per spec, from `contract_registration::register_all` run against the
+    /// wallet's own facts and the chain. This only delivers the answer.
+    pub fn answer_register_contracts(
+        &self,
+        request_id: &str,
+        results: Vec<crate::contract_registration::ContractResult>,
+    ) {
+        self.send(Input::ContractsRegistered {
+            request_id: request_id.to_owned(),
+            results,
+        });
+    }
+
+    /// The person was asked whether this domain may record positions in the
+    /// wallet, and said no.
+    pub fn decline_register_contracts(&self, request_id: &str) {
+        self.send(Input::ContractsDeclined {
+            request_id: request_id.to_owned(),
+        });
+    }
+
+    /// State what the wallet holds of one domain's contracts
+    /// (`contract_registration::statement`): complete, replacing the last. An
+    /// empty list is a statement too, and the one that tells a site a wallet
+    /// restored from its seed holds nothing of it yet. `as_of` is unix
+    /// milliseconds.
+    pub fn report_contracts(
+        &self,
+        domain: &str,
+        contracts: Vec<crate::contract_registration::ContractEntry>,
+        as_of: i64,
+    ) {
+        self.send(Input::ReportContracts {
+            domain: domain.to_owned(),
+            contracts,
+            as_of,
+        });
+    }
+
     pub fn stop_session(&self, session_id: &str) {
         self.send(Input::StopSession {
             session_id: session_id.to_owned(),
@@ -330,10 +384,12 @@ fn apply_effects(
 
 async fn run(
     config: WalletConnectConfig,
+    features: Vec<String>,
     mut input_rx: mpsc::UnboundedReceiver<Input>,
     event_tx: mpsc::UnboundedSender<WalletEvent>,
 ) {
-    let mut core = WalletConnectCore::new(config.install_id, config.descriptor, config.key);
+    let mut core = WalletConnectCore::new(config.install_id, config.descriptor, config.key)
+        .with_features(features);
     let mut delay = RECONNECT_MIN;
 
     loop {

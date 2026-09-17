@@ -22,6 +22,8 @@
 //!   relying party's description verified against the wallet's own facts
 //!   and the chain before anything is stored, and the wallet's statement
 //!   of what it holds.
+//! - [`contract_views`] — what that verifier asks of a host, built from a
+//!   wallet's scripts and balances and a chain backend indexed by script.
 //! - [`lending`] — Swaption lending: typed `sw/lend/*` fund claims
 //!   checked against the template rows the wallet can read itself.
 //!
@@ -36,6 +38,7 @@
 
 pub mod approval;
 pub mod contract_registration;
+pub mod contract_views;
 pub mod contracts;
 pub mod core;
 pub mod identity;
