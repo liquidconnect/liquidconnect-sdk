@@ -146,6 +146,17 @@ pub enum WalletEvent {
     PayRequestRemoved { request_id: String },
     FundRequested { request: FundRequestInfo },
     FundRequestRemoved { request_id: String },
+    /// A relying party describes contracts this wallet is party to but did
+    /// not sign, for the wallet to verify and keep (covenant positions,
+    /// phase 1). The connect server sends it only to an install that
+    /// advertised `contracts/1`, and a host advertises that only once it
+    /// can verify: the verifier is `lc_wallet_core::contract_registration`,
+    /// whose binding here (the wallet's own facts and a chain view handed
+    /// across the boundary, and the call that answers) is not built yet.
+    /// Until it is, no host of this binding advertises the feature and
+    /// this event never arrives.
+    RegisterContractsRequested { request: RegisterContractsRequestInfo },
+    RegisterContractsRequestRemoved { request_id: String },
     Sessions { sessions: Vec<SessionInfo> },
     SessionCreated { session: SessionInfo },
     SessionRemoved { session_id: String },
@@ -193,9 +204,28 @@ fn action_parts(action: wire::UserAction) -> (String, String) {
         A::CancelAssetBalanceRequest { request_id } => {
             ("cancel_asset_balance_request", request_id)
         }
+        A::AcceptRegisterContractsRequest { request_id, .. } => {
+            ("accept_register_contracts_request", request_id)
+        }
+        A::CancelRegisterContractsRequest { request_id } => {
+            ("cancel_register_contracts_request", request_id)
+        }
+        // The statement concerns a domain, not a request.
+        A::ReportContracts { domain, .. } => ("report_contracts", domain),
         A::StopSession { session_id } => ("stop_session", session_id),
     };
     (label.to_owned(), id)
+}
+
+/// A relying party's description of contracts, as it arrived. `contracts_json`
+/// is the request's `contracts` array (`ContractSpec` objects) as JSON text.
+#[derive(uniffi::Record)]
+pub struct RegisterContractsRequestInfo {
+    pub request_id: String,
+    pub domain: String,
+    pub contracts_json: String,
+    pub memo: Option<String>,
+    pub ttl_ms: u64,
 }
 
 #[derive(uniffi::Record)]
@@ -328,6 +358,21 @@ fn map_event(event: transport::WalletEvent) -> WalletEvent {
         },
         transport::WalletEvent::FundRequestRemoved { request_id } => {
             WalletEvent::FundRequestRemoved { request_id }
+        }
+        transport::WalletEvent::RegisterContractsRequested(r) => {
+            let contracts_json = r.contracts_json();
+            WalletEvent::RegisterContractsRequested {
+                request: RegisterContractsRequestInfo {
+                    request_id: r.request_id,
+                    domain: r.domain,
+                    contracts_json,
+                    memo: r.memo,
+                    ttl_ms: r.ttl.as_millis(),
+                },
+            }
+        }
+        transport::WalletEvent::RegisterContractsRequestRemoved { request_id } => {
+            WalletEvent::RegisterContractsRequestRemoved { request_id }
         }
         transport::WalletEvent::Sessions(s) => WalletEvent::Sessions {
             sessions: s.into_iter().map(session_info).collect(),

@@ -121,6 +121,32 @@ pub enum Input {
 
     FundRejected { request_id: String },
 
+    /// Answer a registration request with what the HOST found: one result
+    /// per spec, from `contract_registration::register_all` run against
+    /// the wallet's own facts and the chain. This crate carries the answer;
+    /// it never decides one. The request must still be live, or nothing is
+    /// sent.
+    ContractsRegistered {
+        request_id: String,
+        results: Vec<crate::contract_registration::ContractResult>,
+    },
+
+    /// The person was asked to let this domain record positions (a session
+    /// that predates the consent line) and said no.
+    ContractsDeclined { request_id: String },
+
+    /// State what the wallet holds of one domain's contracts
+    /// (`contract_registration::statement`): complete, replacing the last.
+    /// Kept and sent again after every login, because the connect server
+    /// may have restarted and a relying party reads it from the snapshot.
+    /// An empty list is a statement too.
+    ReportContracts {
+        domain: String,
+        contracts: Vec<crate::contract_registration::ContractEntry>,
+        /// Unix milliseconds; the connect server keeps the newest.
+        as_of: i64,
+    },
+
     RegisterFcmToken { token: String },
 
     StopSession { session_id: String },
@@ -165,6 +191,13 @@ pub enum Effect {
     AddFundRequest { request: wire::FundRequest },
     RemoveFundRequest { request_id: String },
 
+    /// A relying party describes contracts for the wallet to verify and
+    /// keep. There is normally nothing to show: the host verifies and
+    /// answers with `Input::ContractsRegistered`. Only a domain the person
+    /// has not granted yet is asked about, once.
+    AddRegisterContractsRequest { request: wire::RegisterContractsRequest },
+    RemoveRegisterContractsRequest { request_id: String },
+
     SessionList { sessions: Vec<wire::Session> },
     SessionCreated { session: wire::Session },
     SessionRemoved { session_id: String },
@@ -201,6 +234,13 @@ pub struct WalletConnectCore {
     holdings: BTreeMap<String, wire::HoldingsReport>,
     pay_requests: BTreeMap<String, wire::PayRequest>,
     fund_requests: BTreeMap<String, wire::FundRequest>,
+    register_contracts_requests: BTreeMap<String, wire::RegisterContractsRequest>,
+    /// domain -> the host's last statement of what the wallet holds there,
+    /// with its `as_of`. Sent again after every login: the connect server
+    /// may have restarted, and a relying party reads it from the snapshot.
+    statements: BTreeMap<String, (Vec<crate::contract_registration::ContractEntry>, i64)>,
+    /// What the connect server said it relays, at the last login.
+    server_features: Vec<String>,
 
     user_actions: BTreeMap<wire::ReqId, wire::UserAction>,
     next_action_id: wire::ReqId,
@@ -236,6 +276,9 @@ impl WalletConnectCore {
             holdings: BTreeMap::new(),
             pay_requests: BTreeMap::new(),
             fund_requests: BTreeMap::new(),
+            register_contracts_requests: BTreeMap::new(),
+            statements: BTreeMap::new(),
+            server_features: Vec::new(),
             user_actions: BTreeMap::new(),
             // User actions start at 1: id 0 is used by fire-and-forget
             // requests (challenge, login, fcm) whose responses carry no
@@ -499,8 +542,11 @@ impl WalletConnectCore {
                 receive_address_requests,
                 asset_balance_requests,
                 holdings,
+                register_contracts_requests,
+                features,
             }) => {
                 self.login_succeed = true;
+                self.server_features = features;
 
                 // Replay actions the user took while offline.
                 for (&req_id, action) in &self.user_actions {
@@ -519,8 +565,15 @@ impl WalletConnectCore {
                 self.sync_receive_address_requests(receive_address_requests, effects);
                 self.sync_asset_balance_requests(asset_balance_requests, effects);
                 self.sync_holdings(holdings, effects);
+                self.sync_register_contracts_requests(register_contracts_requests, effects);
                 effects.push(Effect::SessionList { sessions });
                 self.send_fcm_token(effects);
+                // What the wallet holds, said again: the server may have
+                // restarted, and a relying party reads it from the snapshot.
+                let domains = self.statements.keys().cloned().collect::<Vec<_>>();
+                for domain in domains {
+                    self.send_statement(&domain, effects);
+                }
             }
 
             wire::Resp::UserAction(_) => {
@@ -671,6 +724,81 @@ impl WalletConnectCore {
                     request_id: n.request_id,
                 });
             }
+
+            wire::Notif::RegisterContractsRequestCreated(notif) => {
+                self.register_contracts_requests
+                    .insert(notif.request.request_id.clone(), notif.request.clone());
+                effects.push(Effect::AddRegisterContractsRequest {
+                    request: notif.request,
+                });
+            }
+
+            wire::Notif::RegisterContractsRequestRemoved(n) => {
+                self.register_contracts_requests.remove(&n.request_id);
+                effects.push(Effect::RemoveRegisterContractsRequest {
+                    request_id: n.request_id,
+                });
+            }
+        }
+    }
+
+    fn sync_register_contracts_requests(
+        &mut self,
+        requests: Vec<wire::RegisterContractsRequest>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let old_request_ids = self
+            .register_contracts_requests
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let new_request_ids = requests
+            .iter()
+            .map(|req| req.request_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        for req_id in old_request_ids.difference(&new_request_ids) {
+            self.register_contracts_requests.remove(req_id);
+            effects.push(Effect::RemoveRegisterContractsRequest {
+                request_id: req_id.clone(),
+            });
+        }
+
+        for request in requests {
+            if !self
+                .register_contracts_requests
+                .contains_key(&request.request_id)
+            {
+                self.register_contracts_requests
+                    .insert(request.request_id.clone(), request.clone());
+                effects.push(Effect::AddRegisterContractsRequest { request });
+            }
+        }
+    }
+
+    /// One domain's statement, fire-and-forget like the FCM token: only
+    /// while logged in, and only to a server that keeps a registry. A
+    /// server that predates contracts names no such feature and is told
+    /// nothing; the statement waits for one that does.
+    fn send_statement(&mut self, domain: &str, effects: &mut Vec<Effect>) {
+        let keeps_registry = self
+            .server_features
+            .iter()
+            .any(|feature| feature == crate::contracts::CONTRACTS_FEATURE);
+        if !(self.connected && self.login_succeed && keeps_registry) {
+            return;
+        }
+        if let Some((contracts, as_of)) = self.statements.get(domain) {
+            effects.push(send(
+                0,
+                wire::Req::UserAction(wire::UserActionReq {
+                    action: wire::UserAction::ReportContracts {
+                        domain: domain.to_owned(),
+                        contracts: contracts.clone(),
+                        as_of: *as_of,
+                    },
+                }),
+            ));
         }
     }
 
@@ -977,6 +1105,40 @@ impl WalletConnectCore {
                 self.finish_request(request_id, &mut effects);
             }
 
+            Input::ContractsRegistered { request_id, results } => {
+                if self.register_contracts_requests.contains_key(&request_id) {
+                    self.add_user_action(
+                        wire::UserAction::AcceptRegisterContractsRequest {
+                            request_id: request_id.clone(),
+                            results,
+                        },
+                        &mut effects,
+                    );
+                } else {
+                    log::error!("registration request {request_id} is not live, dropping its results");
+                }
+                self.finish_request(request_id, &mut effects);
+            }
+
+            Input::ContractsDeclined { request_id } => {
+                self.add_user_action(
+                    wire::UserAction::CancelRegisterContractsRequest {
+                        request_id: request_id.clone(),
+                    },
+                    &mut effects,
+                );
+                self.finish_request(request_id, &mut effects);
+            }
+
+            Input::ReportContracts {
+                domain,
+                contracts,
+                as_of,
+            } => {
+                self.statements.insert(domain.clone(), (contracts, as_of));
+                self.send_statement(&domain, &mut effects);
+            }
+
             Input::RegisterFcmToken { token } => {
                 self.fcm_token = Some(token.clone());
                 self.send_fcm_token(&mut effects);
@@ -1042,6 +1204,18 @@ impl WalletConnectCore {
 
     pub fn get_pay_request(&self, request_id: &str) -> Option<&wire::PayRequest> {
         self.pay_requests.get(request_id)
+    }
+
+    pub fn get_register_contracts_request(
+        &self,
+        request_id: &str,
+    ) -> Option<&wire::RegisterContractsRequest> {
+        self.register_contracts_requests.get(request_id)
+    }
+
+    /// What the connect server said it relays, at the last login.
+    pub fn server_features(&self) -> &[String] {
+        &self.server_features
     }
 
     pub fn get_fund_request(&self, request_id: &str) -> Option<&wire::FundRequest> {
@@ -1580,5 +1754,124 @@ mod tests {
             wire::UserAction::LinkLoginRequest { request_id } if request_id == "nope"
         ));
         assert!(message.contains("unknown or expired login request"));
+    }
+
+    /// Contracts, phase 1. The wallet's statement goes only to a connect
+    /// server that keeps a registry, on every change and again after every
+    /// login, the newest only. A relying party's description reaches the
+    /// host, which verifies it and answers spec by spec; this crate
+    /// carries the answer and never decides one.
+    #[test]
+    fn contracts_are_stated_after_every_login_and_answered_by_the_host() {
+        use crate::contract_registration::{ContractEntry, ContractOutcome, ContractResult, EntryStatus};
+
+        fn login(core: &mut WalletConnectCore, server_features: &str) -> Vec<Effect> {
+            let _ = core.handle(Input::Transport {
+                event: TransportEvent::Connected,
+            });
+            core.handle(Input::Transport {
+                event: TransportEvent::Recv {
+                    text: format!(
+                        r#"{{"Resp":{{"id":0,"resp":{{"Login":{{"sessions":[],"sign_requests":[],"features":{server_features}}}}}}}}}"#
+                    ),
+                },
+            })
+        }
+        fn statements<'a>(frames: &[&'a str]) -> Vec<&'a str> {
+            frames.iter().copied().filter(|f| f.contains("ReportContracts")).collect()
+        }
+
+        let mut core = core();
+        let entry = ContractEntry {
+            contract_id: "ab".repeat(32),
+            kind: "sw/lend/claim/v1".to_owned(),
+            state: None,
+            status: EntryStatus::Active,
+        };
+        // Stated while offline: kept, nothing sent.
+        let effects = core.handle(Input::ReportContracts {
+            domain: "paper.swaption.io".to_owned(),
+            contracts: vec![entry],
+            as_of: 1_000,
+        });
+        assert!(sent_frames(&effects).is_empty());
+
+        // A connect server that predates contracts is told nothing.
+        let effects = login(&mut core, "[]");
+        assert!(statements(&sent_frames(&effects)).is_empty());
+        assert!(core.server_features().is_empty());
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Disconnected,
+        });
+
+        // One that keeps a registry hears it after the login…
+        let effects = login(&mut core, r#"["contracts/1"]"#);
+        let frames = sent_frames(&effects);
+        let stated = statements(&frames);
+        assert_eq!(stated.len(), 1);
+        assert!(stated[0].contains(r#""domain":"paper.swaption.io""#), "{}", stated[0]);
+        assert!(stated[0].contains(r#""as_of":1000"#), "{}", stated[0]);
+        assert_eq!(core.server_features(), ["contracts/1".to_owned()]);
+        // …on every change (an empty statement is one)…
+        let effects = core.handle(Input::ReportContracts {
+            domain: "paper.swaption.io".to_owned(),
+            contracts: vec![],
+            as_of: 2_000,
+        });
+        let frames = sent_frames(&effects);
+        assert!(frames[0].contains(r#""contracts":[],"as_of":2000"#), "{}", frames[0]);
+        // …and again after a reconnect, the newest only.
+        let _ = core.handle(Input::Transport {
+            event: TransportEvent::Disconnected,
+        });
+        let effects = login(&mut core, r#"["contracts/1"]"#);
+        let frames = sent_frames(&effects);
+        let stated = statements(&frames);
+        assert_eq!(stated.len(), 1);
+        assert!(stated[0].contains(r#""as_of":2000"#), "{}", stated[0]);
+
+        // A relying party's description reaches the host…
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Notif":{"notif":{"RegisterContractsRequestCreated":{"request":{"request_id":"c1","domain":"paper.swaption.io","contracts":[],"ttl":60000}}}}}"#.to_owned(),
+            },
+        });
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::AddRegisterContractsRequest { request } if request.request_id == "c1")));
+        assert!(core.get_register_contracts_request("c1").is_some());
+        // …which answers with what it verified.
+        let effects = core.handle(Input::ContractsRegistered {
+            request_id: "c1".to_owned(),
+            results: vec![ContractResult {
+                contract_id: "ab".repeat(32),
+                outcome: ContractOutcome::Registered,
+            }],
+        });
+        let frames = sent_frames(&effects);
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].contains("AcceptRegisterContractsRequest"));
+        assert!(frames[0].contains(r#""outcome":"Registered""#));
+        // Results for a request that is not live go nowhere.
+        let effects = core.handle(Input::ContractsRegistered {
+            request_id: "nope".to_owned(),
+            results: vec![],
+        });
+        assert!(sent_frames(&effects).is_empty());
+        // A domain the person did not grant: cancelled at the server.
+        let effects = core.handle(Input::ContractsDeclined {
+            request_id: "c1".to_owned(),
+        });
+        assert!(sent_frames(&effects)[0].contains("CancelRegisterContractsRequest"));
+        // The server removes a request: the host is told, the core forgets it.
+        let effects = core.handle(Input::Transport {
+            event: TransportEvent::Recv {
+                text: r#"{"Notif":{"notif":{"RegisterContractsRequestRemoved":{"request_id":"c1"}}}}"#.to_owned(),
+            },
+        });
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::RemoveRegisterContractsRequest { request_id } if request_id == "c1")));
+        assert!(core.get_register_contracts_request("c1").is_none());
     }
 }

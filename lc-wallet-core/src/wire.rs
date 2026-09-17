@@ -236,6 +236,33 @@ pub struct FundRequest {
     pub ttl: DurationMs,
 }
 
+/// A relying party's description of contracts this wallet is party to but
+/// did not sign (a lender's positions, coins paid to a claim script, a
+/// transition the venue built, everything after a restore). Untrusted: the
+/// host verifies every spec against the wallet's own facts and the chain
+/// (`contract_registration::register_all`) and answers spec by spec. No
+/// dialog, unless the domain has not been granted yet. Sent only to an
+/// install that advertised `contracts/1` (`LoginReq::features`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterContractsRequest {
+    pub request_id: String,
+    /// The connect server's word for who asks, never the relying party's.
+    pub domain: String,
+    pub contracts: Vec<crate::contract_registration::ContractSpec>,
+    /// Shown in the wallet's log, e.g. "Your lending positions".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memo: Option<String>,
+    pub ttl: DurationMs,
+}
+
+impl RegisterContractsRequest {
+    /// The `contracts` array as JSON text, for a binding that hands the
+    /// specs across a language boundary as they arrived.
+    pub fn contracts_json(&self) -> String {
+        serde_json::to_string(&self.contracts).unwrap_or_else(|_| "[]".to_owned())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UserAction {
     LinkLoginRequest {
@@ -324,6 +351,29 @@ pub enum UserAction {
         request_id: String,
     },
 
+    /// Answer a [`RegisterContractsRequest`]: one result per spec, in the
+    /// request's order. A batch may be partly refused.
+    AcceptRegisterContractsRequest {
+        request_id: String,
+        results: Vec<crate::contract_registration::ContractResult>,
+    },
+
+    CancelRegisterContractsRequest {
+        request_id: String,
+    },
+
+    /// The statement: everything this wallet holds of `domain`'s contracts,
+    /// complete, replacing the last one. Sent after login for every domain
+    /// the wallet has records for, and whenever a record of that domain
+    /// changes. Empty = the wallet holds nothing of this domain (a wallet
+    /// restored from its seed says exactly that, and the relying party
+    /// registers again). `as_of` is unix milliseconds; the newest wins.
+    ReportContracts {
+        domain: String,
+        contracts: Vec<crate::contract_registration::ContractEntry>,
+        as_of: i64,
+    },
+
     StopSession {
         session_id: String,
     },
@@ -386,6 +436,17 @@ pub struct LoginResp {
     /// Defaulted for connect servers that predate holdings.
     #[serde(default)]
     pub holdings: Vec<HoldingsReport>,
+    /// Pending registration requests for this install. Defaulted for
+    /// connect servers that predate contracts.
+    #[serde(default)]
+    pub register_contracts_requests: Vec<RegisterContractsRequest>,
+    /// What this connect server relays beyond the base protocol, as
+    /// `name/version` strings: the wallet's side of the features list. A
+    /// wallet states what it holds (`UserAction::ReportContracts`) only to
+    /// a server that names `contracts/1`. Defaulted: a server that
+    /// predates the list names nothing.
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -496,6 +557,16 @@ pub struct FundRequestRemovedNotif {
     pub request_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterContractsRequestCreatedNotif {
+    pub request: RegisterContractsRequest,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterContractsRequestRemovedNotif {
+    pub request_id: String,
+}
+
 // Errors
 
 /// Matches the deployed connect server's wallet-side `ErrorCode`
@@ -556,6 +627,10 @@ pub enum Notif {
     /// An RP reported what it holds for this wallet (docs/held-balances-spec.md).
     HoldingsUpdated(HoldingsUpdatedNotif),
     HoldingsRemoved(HoldingsRemovedNotif),
+    /// A relying party describes contracts for the wallet to verify and
+    /// keep. Only ever sent to an install that advertised `contracts/1`.
+    RegisterContractsRequestCreated(RegisterContractsRequestCreatedNotif),
+    RegisterContractsRequestRemoved(RegisterContractsRequestRemovedNotif),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -908,5 +983,89 @@ mod tests {
         let back: InstallId =
             serde_json::from_str("\"abababababababababababababababab\"").unwrap();
         assert_eq!(back, id);
+    }
+
+    /// The contracts frames (phase 1), pinned. `sideswap_rust`'s
+    /// `connect_api` carries the same shapes; never change one side alone.
+    #[test]
+    fn register_contracts_wire_shapes() {
+        use crate::contract_registration::{ContractEntry, ContractOutcome, ContractResult, EntryStatus};
+
+        // Server -> wallet: a relying party's description, to be verified.
+        let from: From = serde_json::from_str(
+            r#"{"Notif":{"notif":{"RegisterContractsRequestCreated":{"request":{"request_id":"c1","domain":"paper.swaption.io","contracts":[{"contract_id":"abababababababababababababababababababababababababababababababab","kind":"sw/lend/claim/v1","leaf":"51f916310d382610bf7efd7b345d9641b3dc93917d2afb77289add911f3403e1","params":{"lender_token":"4444444444444444444444444444444444444444444444444444444444444444"},"role":"lender","coins":[{"txid":"6161616161616161616161616161616161616161616161616161616161616161","vout":1,"asset":"b612eb46313a2cd6ebabd8b7a8eed5696e29898b87a43bff41c94f51acef9d73","amount":"45685276800"}]}],"memo":"Your lending positions","ttl":60000}}}}}"#,
+        )
+        .unwrap();
+        match from {
+            From::Notif {
+                notif: Notif::RegisterContractsRequestCreated(n),
+            } => {
+                assert_eq!(n.request.domain, "paper.swaption.io");
+                assert_eq!(n.request.contracts.len(), 1);
+                assert_eq!(n.request.contracts[0].kind, "sw/lend/claim/v1");
+                assert!(n.request.contracts[0].state.is_none());
+                assert_eq!(n.request.contracts[0].coins[0].amount, "45685276800");
+                assert_eq!(n.request.memo.as_deref(), Some("Your lending positions"));
+            }
+            other => panic!("wrong parse: {other:?}"),
+        }
+
+        // Wallet -> server: one result per spec, a batch may be partly refused.
+        let to = To::Req {
+            id: 11,
+            req: Req::UserAction(UserActionReq {
+                action: UserAction::AcceptRegisterContractsRequest {
+                    request_id: "c1".to_owned(),
+                    results: vec![
+                        ContractResult {
+                            contract_id: "ab".repeat(32),
+                            outcome: ContractOutcome::Registered,
+                        },
+                        ContractResult {
+                            contract_id: "cd".repeat(32),
+                            outcome: ContractOutcome::Rejected {
+                                reason: "coin_mismatch".to_owned(),
+                            },
+                        },
+                    ],
+                },
+            }),
+        };
+        assert_eq!(
+            serde_json::to_string(&to).unwrap(),
+            format!(
+                r#"{{"Req":{{"id":11,"req":{{"UserAction":{{"action":{{"AcceptRegisterContractsRequest":{{"request_id":"c1","results":[{{"contract_id":"{}","outcome":"Registered"}},{{"contract_id":"{}","outcome":{{"Rejected":{{"reason":"coin_mismatch"}}}}}}]}}}}}}}}}}}}"#,
+                "ab".repeat(32),
+                "cd".repeat(32)
+            )
+        );
+
+        // Wallet -> server: the statement. Empty is a statement too.
+        let to = To::Req {
+            id: 12,
+            req: Req::UserAction(UserActionReq {
+                action: UserAction::ReportContracts {
+                    domain: "paper.swaption.io".to_owned(),
+                    contracts: vec![ContractEntry {
+                        contract_id: "ab".repeat(32),
+                        kind: "sw/lend/position/v4".to_owned(),
+                        state: Some("46117756200".to_owned()),
+                        status: EntryStatus::Active,
+                    }],
+                    as_of: 1_789_624_000_000,
+                },
+            }),
+        };
+        assert_eq!(
+            serde_json::to_string(&to).unwrap(),
+            format!(
+                r#"{{"Req":{{"id":12,"req":{{"UserAction":{{"action":{{"ReportContracts":{{"domain":"paper.swaption.io","contracts":[{{"contract_id":"{}","kind":"sw/lend/position/v4","state":"46117756200","status":"Active"}}],"as_of":1789624000000}}}}}}}}}}}}"#,
+                "ab".repeat(32)
+            )
+        );
+
+        // A connect server that predates contracts sends no such list.
+        let resp: LoginResp = serde_json::from_str(r#"{"sessions":[],"sign_requests":[]}"#).unwrap();
+        assert!(resp.register_contracts_requests.is_empty());
     }
 }

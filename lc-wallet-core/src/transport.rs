@@ -56,6 +56,12 @@ pub enum WalletEvent {
     FundRequested(wire::FundRequest),
     FundRequestRemoved { request_id: String },
 
+    /// A relying party describes contracts for the wallet to verify and
+    /// keep (`contract_registration::register_all`), answered through
+    /// `Input::ContractsRegistered`. Normally nothing is shown.
+    RegisterContractsRequested(wire::RegisterContractsRequest),
+    RegisterContractsRequestRemoved { request_id: String },
+
     Sessions(Vec<wire::Session>),
 
     /// The server refused an action this wallet sent (e.g. a link for an
@@ -303,6 +309,12 @@ fn apply_effects(
             Effect::AddFundRequest { request } => WalletEvent::FundRequested(request),
             Effect::RemoveFundRequest { request_id } => {
                 WalletEvent::FundRequestRemoved { request_id }
+            }
+            Effect::AddRegisterContractsRequest { request } => {
+                WalletEvent::RegisterContractsRequested(request)
+            }
+            Effect::RemoveRegisterContractsRequest { request_id } => {
+                WalletEvent::RegisterContractsRequestRemoved { request_id }
             }
             Effect::SessionList { sessions } => WalletEvent::Sessions(sessions),
             Effect::SessionCreated { session } => WalletEvent::SessionCreated(session),
