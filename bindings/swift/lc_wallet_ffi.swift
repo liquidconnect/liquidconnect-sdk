@@ -406,6 +406,22 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -431,6 +447,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     }
 
     public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
+    typealias FfiType = Int64
+    typealias SwiftType = Int64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int64, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
@@ -821,11 +853,6 @@ public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
     
     func acceptLogin(requestId: String) 
     
-    /**
-     * Approve a pay request with the txid of the payment the host wallet
-     * built, signed and broadcast itself from its own coins. The SDK
-     * never builds the transaction.
-     */
     func acceptPay(requestId: String, txid: String) 
     
     /**
@@ -853,13 +880,35 @@ public protocol LiquidConnectWalletProtocol: AnyObject, Sendable {
      */
     func openLink(url: String) throws 
     
+    /**
+     * Answer an asset-balance request with this wallet's confirmed
+     * balance of the named asset, in base units. Confirmed coins only:
+     * the RP shows what could be sent over now, not what is in flight.
+     */
+    func provideAssetBalance(requestId: String, amount: UInt64) 
+    
+    /**
+     * Approve a pay request with the txid of the payment the host wallet
+     * built, signed and broadcast itself from its own coins. The SDK
+     * never builds the transaction.
+     * Answer a receive-address request with an address from this
+     * wallet. Give a FRESH unused one: reusing an address links every
+     * payout the RP makes to you into one on-chain cluster, which is
+     * most of what this request exists to avoid.
+     */
+    func provideReceiveAddress(requestId: String, address: String) 
+    
     func registerFcmToken(token: String) 
+    
+    func rejectAssetBalance(requestId: String) 
     
     func rejectFund(requestId: String) 
     
     func rejectLogin(requestId: String) 
     
     func rejectPay(requestId: String) 
+    
+    func rejectReceiveAddress(requestId: String) 
     
     func rejectSign(requestId: String) 
     
@@ -963,11 +1012,6 @@ open func acceptLogin(requestId: String)  {try! rustCall() {
 }
 }
     
-    /**
-     * Approve a pay request with the txid of the payment the host wallet
-     * built, signed and broadcast itself from its own coins. The SDK
-     * never builds the transaction.
-     */
 open func acceptPay(requestId: String, txid: String)  {try! rustCall() {
     uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_accept_pay(self.uniffiClonePointer(),
         FfiConverterString.lower(requestId),
@@ -1023,9 +1067,46 @@ open func openLink(url: String)throws   {try rustCallWithError(FfiConverterTypeL
 }
 }
     
+    /**
+     * Answer an asset-balance request with this wallet's confirmed
+     * balance of the named asset, in base units. Confirmed coins only:
+     * the RP shows what could be sent over now, not what is in flight.
+     */
+open func provideAssetBalance(requestId: String, amount: UInt64)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_provide_asset_balance(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),
+        FfiConverterUInt64.lower(amount),$0
+    )
+}
+}
+    
+    /**
+     * Approve a pay request with the txid of the payment the host wallet
+     * built, signed and broadcast itself from its own coins. The SDK
+     * never builds the transaction.
+     * Answer a receive-address request with an address from this
+     * wallet. Give a FRESH unused one: reusing an address links every
+     * payout the RP makes to you into one on-chain cluster, which is
+     * most of what this request exists to avoid.
+     */
+open func provideReceiveAddress(requestId: String, address: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_provide_receive_address(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),
+        FfiConverterString.lower(address),$0
+    )
+}
+}
+    
 open func registerFcmToken(token: String)  {try! rustCall() {
     uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_register_fcm_token(self.uniffiClonePointer(),
         FfiConverterString.lower(token),$0
+    )
+}
+}
+    
+open func rejectAssetBalance(requestId: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_asset_balance(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),$0
     )
 }
 }
@@ -1046,6 +1127,13 @@ open func rejectLogin(requestId: String)  {try! rustCall() {
     
 open func rejectPay(requestId: String)  {try! rustCall() {
     uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_pay(self.uniffiClonePointer(),
+        FfiConverterString.lower(requestId),$0
+    )
+}
+}
+    
+open func rejectReceiveAddress(requestId: String)  {try! rustCall() {
+    uniffi_lc_wallet_ffi_fn_method_liquidconnectwallet_reject_receive_address(self.uniffiClonePointer(),
         FfiConverterString.lower(requestId),$0
     )
 }
@@ -1307,6 +1395,106 @@ public func FfiConverterTypeWalletEventListener_lower(_ value: WalletEventListen
 }
 
 
+
+
+public struct AssetBalanceRequestInfo {
+    public var requestId: String
+    public var domain: String
+    public var description: String?
+    /**
+     * Liquid asset id, 64 hex chars.
+     */
+    public var assetId: String
+    public var ttlMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requestId: String, domain: String, description: String?, 
+        /**
+         * Liquid asset id, 64 hex chars.
+         */assetId: String, ttlMs: UInt64) {
+        self.requestId = requestId
+        self.domain = domain
+        self.description = description
+        self.assetId = assetId
+        self.ttlMs = ttlMs
+    }
+}
+
+#if compiler(>=6)
+extension AssetBalanceRequestInfo: Sendable {}
+#endif
+
+
+extension AssetBalanceRequestInfo: Equatable, Hashable {
+    public static func ==(lhs: AssetBalanceRequestInfo, rhs: AssetBalanceRequestInfo) -> Bool {
+        if lhs.requestId != rhs.requestId {
+            return false
+        }
+        if lhs.domain != rhs.domain {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.assetId != rhs.assetId {
+            return false
+        }
+        if lhs.ttlMs != rhs.ttlMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(requestId)
+        hasher.combine(domain)
+        hasher.combine(description)
+        hasher.combine(assetId)
+        hasher.combine(ttlMs)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAssetBalanceRequestInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AssetBalanceRequestInfo {
+        return
+            try AssetBalanceRequestInfo(
+                requestId: FfiConverterString.read(from: &buf), 
+                domain: FfiConverterString.read(from: &buf), 
+                description: FfiConverterOptionString.read(from: &buf), 
+                assetId: FfiConverterString.read(from: &buf), 
+                ttlMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AssetBalanceRequestInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.requestId, into: &buf)
+        FfiConverterString.write(value.domain, into: &buf)
+        FfiConverterOptionString.write(value.description, into: &buf)
+        FfiConverterString.write(value.assetId, into: &buf)
+        FfiConverterUInt64.write(value.ttlMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAssetBalanceRequestInfo_lift(_ buf: RustBuffer) throws -> AssetBalanceRequestInfo {
+    return try FfiConverterTypeAssetBalanceRequestInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAssetBalanceRequestInfo_lower(_ value: AssetBalanceRequestInfo) -> RustBuffer {
+    return FfiConverterTypeAssetBalanceRequestInfo.lower(value)
+}
 
 
 public struct ConnectHintInfo {
@@ -1902,6 +2090,204 @@ public func FfiConverterTypeFundTemplateSummary_lift(_ buf: RustBuffer) throws -
 #endif
 public func FfiConverterTypeFundTemplateSummary_lower(_ value: FundTemplateSummary) -> RustBuffer {
     return FfiConverterTypeFundTemplateSummary.lower(value)
+}
+
+
+public struct HoldingInfo {
+    public var label: String
+    /**
+     * "balance", "position", "collateral", "credit" — or anything else
+     */
+    public var kind: String
+    public var assetId: String?
+    public var unit: String
+    /**
+     * base units, signed (a short position is negative)
+     */
+    public var amount: Int64
+    public var precision: UInt8
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(label: String, 
+        /**
+         * "balance", "position", "collateral", "credit" — or anything else
+         */kind: String, assetId: String?, unit: String, 
+        /**
+         * base units, signed (a short position is negative)
+         */amount: Int64, precision: UInt8) {
+        self.label = label
+        self.kind = kind
+        self.assetId = assetId
+        self.unit = unit
+        self.amount = amount
+        self.precision = precision
+    }
+}
+
+#if compiler(>=6)
+extension HoldingInfo: Sendable {}
+#endif
+
+
+extension HoldingInfo: Equatable, Hashable {
+    public static func ==(lhs: HoldingInfo, rhs: HoldingInfo) -> Bool {
+        if lhs.label != rhs.label {
+            return false
+        }
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        if lhs.assetId != rhs.assetId {
+            return false
+        }
+        if lhs.unit != rhs.unit {
+            return false
+        }
+        if lhs.amount != rhs.amount {
+            return false
+        }
+        if lhs.precision != rhs.precision {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(label)
+        hasher.combine(kind)
+        hasher.combine(assetId)
+        hasher.combine(unit)
+        hasher.combine(amount)
+        hasher.combine(precision)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeHoldingInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HoldingInfo {
+        return
+            try HoldingInfo(
+                label: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterString.read(from: &buf), 
+                assetId: FfiConverterOptionString.read(from: &buf), 
+                unit: FfiConverterString.read(from: &buf), 
+                amount: FfiConverterInt64.read(from: &buf), 
+                precision: FfiConverterUInt8.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: HoldingInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.label, into: &buf)
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterOptionString.write(value.assetId, into: &buf)
+        FfiConverterString.write(value.unit, into: &buf)
+        FfiConverterInt64.write(value.amount, into: &buf)
+        FfiConverterUInt8.write(value.precision, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHoldingInfo_lift(_ buf: RustBuffer) throws -> HoldingInfo {
+    return try FfiConverterTypeHoldingInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHoldingInfo_lower(_ value: HoldingInfo) -> RustBuffer {
+    return FfiConverterTypeHoldingInfo.lower(value)
+}
+
+
+public struct HoldingsReportInfo {
+    public var domain: String
+    public var holdings: [HoldingInfo]
+    /**
+     * unix ms, as the RP stamped it
+     */
+    public var asOfMs: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(domain: String, holdings: [HoldingInfo], 
+        /**
+         * unix ms, as the RP stamped it
+         */asOfMs: Int64) {
+        self.domain = domain
+        self.holdings = holdings
+        self.asOfMs = asOfMs
+    }
+}
+
+#if compiler(>=6)
+extension HoldingsReportInfo: Sendable {}
+#endif
+
+
+extension HoldingsReportInfo: Equatable, Hashable {
+    public static func ==(lhs: HoldingsReportInfo, rhs: HoldingsReportInfo) -> Bool {
+        if lhs.domain != rhs.domain {
+            return false
+        }
+        if lhs.holdings != rhs.holdings {
+            return false
+        }
+        if lhs.asOfMs != rhs.asOfMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(domain)
+        hasher.combine(holdings)
+        hasher.combine(asOfMs)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeHoldingsReportInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HoldingsReportInfo {
+        return
+            try HoldingsReportInfo(
+                domain: FfiConverterString.read(from: &buf), 
+                holdings: FfiConverterSequenceTypeHoldingInfo.read(from: &buf), 
+                asOfMs: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: HoldingsReportInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.domain, into: &buf)
+        FfiConverterSequenceTypeHoldingInfo.write(value.holdings, into: &buf)
+        FfiConverterInt64.write(value.asOfMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHoldingsReportInfo_lift(_ buf: RustBuffer) throws -> HoldingsReportInfo {
+    return try FfiConverterTypeHoldingsReportInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHoldingsReportInfo_lower(_ value: HoldingsReportInfo) -> RustBuffer {
+    return FfiConverterTypeHoldingsReportInfo.lower(value)
 }
 
 
@@ -2506,6 +2892,190 @@ public func FfiConverterTypePhoneStageInfo_lift(_ buf: RustBuffer) throws -> Pho
 #endif
 public func FfiConverterTypePhoneStageInfo_lower(_ value: PhoneStageInfo) -> RustBuffer {
     return FfiConverterTypePhoneStageInfo.lower(value)
+}
+
+
+public struct ReceiveAddressRequestInfo {
+    public var requestId: String
+    public var domain: String
+    public var description: String?
+    public var ttlMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requestId: String, domain: String, description: String?, ttlMs: UInt64) {
+        self.requestId = requestId
+        self.domain = domain
+        self.description = description
+        self.ttlMs = ttlMs
+    }
+}
+
+#if compiler(>=6)
+extension ReceiveAddressRequestInfo: Sendable {}
+#endif
+
+
+extension ReceiveAddressRequestInfo: Equatable, Hashable {
+    public static func ==(lhs: ReceiveAddressRequestInfo, rhs: ReceiveAddressRequestInfo) -> Bool {
+        if lhs.requestId != rhs.requestId {
+            return false
+        }
+        if lhs.domain != rhs.domain {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.ttlMs != rhs.ttlMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(requestId)
+        hasher.combine(domain)
+        hasher.combine(description)
+        hasher.combine(ttlMs)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReceiveAddressRequestInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReceiveAddressRequestInfo {
+        return
+            try ReceiveAddressRequestInfo(
+                requestId: FfiConverterString.read(from: &buf), 
+                domain: FfiConverterString.read(from: &buf), 
+                description: FfiConverterOptionString.read(from: &buf), 
+                ttlMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReceiveAddressRequestInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.requestId, into: &buf)
+        FfiConverterString.write(value.domain, into: &buf)
+        FfiConverterOptionString.write(value.description, into: &buf)
+        FfiConverterUInt64.write(value.ttlMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReceiveAddressRequestInfo_lift(_ buf: RustBuffer) throws -> ReceiveAddressRequestInfo {
+    return try FfiConverterTypeReceiveAddressRequestInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReceiveAddressRequestInfo_lower(_ value: ReceiveAddressRequestInfo) -> RustBuffer {
+    return FfiConverterTypeReceiveAddressRequestInfo.lower(value)
+}
+
+
+/**
+ * A relying party's description of contracts, as it arrived. `contracts_json`
+ * is the request's `contracts` array (`ContractSpec` objects) as JSON text.
+ */
+public struct RegisterContractsRequestInfo {
+    public var requestId: String
+    public var domain: String
+    public var contractsJson: String
+    public var memo: String?
+    public var ttlMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requestId: String, domain: String, contractsJson: String, memo: String?, ttlMs: UInt64) {
+        self.requestId = requestId
+        self.domain = domain
+        self.contractsJson = contractsJson
+        self.memo = memo
+        self.ttlMs = ttlMs
+    }
+}
+
+#if compiler(>=6)
+extension RegisterContractsRequestInfo: Sendable {}
+#endif
+
+
+extension RegisterContractsRequestInfo: Equatable, Hashable {
+    public static func ==(lhs: RegisterContractsRequestInfo, rhs: RegisterContractsRequestInfo) -> Bool {
+        if lhs.requestId != rhs.requestId {
+            return false
+        }
+        if lhs.domain != rhs.domain {
+            return false
+        }
+        if lhs.contractsJson != rhs.contractsJson {
+            return false
+        }
+        if lhs.memo != rhs.memo {
+            return false
+        }
+        if lhs.ttlMs != rhs.ttlMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(requestId)
+        hasher.combine(domain)
+        hasher.combine(contractsJson)
+        hasher.combine(memo)
+        hasher.combine(ttlMs)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRegisterContractsRequestInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RegisterContractsRequestInfo {
+        return
+            try RegisterContractsRequestInfo(
+                requestId: FfiConverterString.read(from: &buf), 
+                domain: FfiConverterString.read(from: &buf), 
+                contractsJson: FfiConverterString.read(from: &buf), 
+                memo: FfiConverterOptionString.read(from: &buf), 
+                ttlMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RegisterContractsRequestInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.requestId, into: &buf)
+        FfiConverterString.write(value.domain, into: &buf)
+        FfiConverterString.write(value.contractsJson, into: &buf)
+        FfiConverterOptionString.write(value.memo, into: &buf)
+        FfiConverterUInt64.write(value.ttlMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRegisterContractsRequestInfo_lift(_ buf: RustBuffer) throws -> RegisterContractsRequestInfo {
+    return try FfiConverterTypeRegisterContractsRequestInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRegisterContractsRequestInfo_lower(_ value: RegisterContractsRequestInfo) -> RustBuffer {
+    return FfiConverterTypeRegisterContractsRequestInfo.lower(value)
 }
 
 
@@ -3123,6 +3693,34 @@ public enum WalletEvent {
     )
     case signMessageRequestRemoved(requestId: String
     )
+    /**
+     * An RP asked for ONE address to pay this wallet at. The host
+     * answers with a FRESH unused address in the session's network, or
+     * rejects — see docs/receive-address-spec.md.
+     */
+    case receiveAddressRequested(request: ReceiveAddressRequestInfo
+    )
+    case receiveAddressRequestRemoved(requestId: String
+    )
+    /**
+     * An RP asked for this wallet's balance of ONE asset. The host
+     * answers with the confirmed amount in base units, or rejects — see
+     * docs/asset-balance-spec.md.
+     */
+    case assetBalanceRequested(request: AssetBalanceRequestInfo
+    )
+    case assetBalanceRequestRemoved(requestId: String
+    )
+    /**
+     * An RP reported what it holds for this wallet (a venue's margin
+     * balance and position, a lending desk's collateral). Nothing to
+     * answer: show it under the RP's name, with its age — see
+     * docs/held-balances-spec.md. An update replaces the whole entry.
+     */
+    case holdingsUpdated(report: HoldingsReportInfo
+    )
+    case holdingsRemoved(domain: String
+    )
     case payRequested(request: PayRequestInfo
     )
     case payRequestRemoved(requestId: String
@@ -3131,11 +3729,36 @@ public enum WalletEvent {
     )
     case fundRequestRemoved(requestId: String
     )
+    /**
+     * A relying party describes contracts this wallet is party to but did
+     * not sign, for the wallet to verify and keep (covenant positions,
+     * phase 1). The connect server sends it only to an install that
+     * advertised `contracts/1`, and a host advertises that only once it
+     * can verify: the verifier is `lc_wallet_core::contract_registration`,
+     * whose binding here (the wallet's own facts and a chain view handed
+     * across the boundary, and the call that answers) is not built yet.
+     * Until it is, no host of this binding advertises the feature and
+     * this event never arrives.
+     */
+    case registerContractsRequested(request: RegisterContractsRequestInfo
+    )
+    case registerContractsRequestRemoved(requestId: String
+    )
     case sessions(sessions: [SessionInfo]
     )
     case sessionCreated(session: SessionInfo
     )
     case sessionRemoved(sessionId: String
+    )
+    /**
+     * The connect server REFUSED an action this wallet sent (an accept,
+     * a cancel, a link login, a session stop). The host must render it:
+     * a swallowed refusal is how a wrong-network deep link died in
+     * silence. `action` is a stable kind label and `subject_id` the
+     * request (or session) it concerned, so a host can tie the failure
+     * back to the thing the user was looking at without parsing prose.
+     */
+    case actionFailed(action: String, subjectId: String, message: String
     )
     case minimizeMobileApp
 }
@@ -3179,28 +3802,55 @@ public struct FfiConverterTypeWalletEvent: FfiConverterRustBuffer {
         case 9: return .signMessageRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
         )
         
-        case 10: return .payRequested(request: try FfiConverterTypePayRequestInfo.read(from: &buf)
+        case 10: return .receiveAddressRequested(request: try FfiConverterTypeReceiveAddressRequestInfo.read(from: &buf)
         )
         
-        case 11: return .payRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
+        case 11: return .receiveAddressRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
         )
         
-        case 12: return .fundRequested(request: try FfiConverterTypeFundRequestInfo.read(from: &buf)
+        case 12: return .assetBalanceRequested(request: try FfiConverterTypeAssetBalanceRequestInfo.read(from: &buf)
         )
         
-        case 13: return .fundRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
+        case 13: return .assetBalanceRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
         )
         
-        case 14: return .sessions(sessions: try FfiConverterSequenceTypeSessionInfo.read(from: &buf)
+        case 14: return .holdingsUpdated(report: try FfiConverterTypeHoldingsReportInfo.read(from: &buf)
         )
         
-        case 15: return .sessionCreated(session: try FfiConverterTypeSessionInfo.read(from: &buf)
+        case 15: return .holdingsRemoved(domain: try FfiConverterString.read(from: &buf)
         )
         
-        case 16: return .sessionRemoved(sessionId: try FfiConverterString.read(from: &buf)
+        case 16: return .payRequested(request: try FfiConverterTypePayRequestInfo.read(from: &buf)
         )
         
-        case 17: return .minimizeMobileApp
+        case 17: return .payRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 18: return .fundRequested(request: try FfiConverterTypeFundRequestInfo.read(from: &buf)
+        )
+        
+        case 19: return .fundRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 20: return .registerContractsRequested(request: try FfiConverterTypeRegisterContractsRequestInfo.read(from: &buf)
+        )
+        
+        case 21: return .registerContractsRequestRemoved(requestId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 22: return .sessions(sessions: try FfiConverterSequenceTypeSessionInfo.read(from: &buf)
+        )
+        
+        case 23: return .sessionCreated(session: try FfiConverterTypeSessionInfo.read(from: &buf)
+        )
+        
+        case 24: return .sessionRemoved(sessionId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 25: return .actionFailed(action: try FfiConverterString.read(from: &buf), subjectId: try FfiConverterString.read(from: &buf), message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 26: return .minimizeMobileApp
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -3252,43 +3902,90 @@ public struct FfiConverterTypeWalletEvent: FfiConverterRustBuffer {
             FfiConverterString.write(requestId, into: &buf)
             
         
-        case let .payRequested(request):
+        case let .receiveAddressRequested(request):
             writeInt(&buf, Int32(10))
-            FfiConverterTypePayRequestInfo.write(request, into: &buf)
+            FfiConverterTypeReceiveAddressRequestInfo.write(request, into: &buf)
             
         
-        case let .payRequestRemoved(requestId):
+        case let .receiveAddressRequestRemoved(requestId):
             writeInt(&buf, Int32(11))
             FfiConverterString.write(requestId, into: &buf)
             
         
-        case let .fundRequested(request):
+        case let .assetBalanceRequested(request):
             writeInt(&buf, Int32(12))
-            FfiConverterTypeFundRequestInfo.write(request, into: &buf)
+            FfiConverterTypeAssetBalanceRequestInfo.write(request, into: &buf)
             
         
-        case let .fundRequestRemoved(requestId):
+        case let .assetBalanceRequestRemoved(requestId):
             writeInt(&buf, Int32(13))
             FfiConverterString.write(requestId, into: &buf)
             
         
-        case let .sessions(sessions):
+        case let .holdingsUpdated(report):
             writeInt(&buf, Int32(14))
+            FfiConverterTypeHoldingsReportInfo.write(report, into: &buf)
+            
+        
+        case let .holdingsRemoved(domain):
+            writeInt(&buf, Int32(15))
+            FfiConverterString.write(domain, into: &buf)
+            
+        
+        case let .payRequested(request):
+            writeInt(&buf, Int32(16))
+            FfiConverterTypePayRequestInfo.write(request, into: &buf)
+            
+        
+        case let .payRequestRemoved(requestId):
+            writeInt(&buf, Int32(17))
+            FfiConverterString.write(requestId, into: &buf)
+            
+        
+        case let .fundRequested(request):
+            writeInt(&buf, Int32(18))
+            FfiConverterTypeFundRequestInfo.write(request, into: &buf)
+            
+        
+        case let .fundRequestRemoved(requestId):
+            writeInt(&buf, Int32(19))
+            FfiConverterString.write(requestId, into: &buf)
+            
+        
+        case let .registerContractsRequested(request):
+            writeInt(&buf, Int32(20))
+            FfiConverterTypeRegisterContractsRequestInfo.write(request, into: &buf)
+            
+        
+        case let .registerContractsRequestRemoved(requestId):
+            writeInt(&buf, Int32(21))
+            FfiConverterString.write(requestId, into: &buf)
+            
+        
+        case let .sessions(sessions):
+            writeInt(&buf, Int32(22))
             FfiConverterSequenceTypeSessionInfo.write(sessions, into: &buf)
             
         
         case let .sessionCreated(session):
-            writeInt(&buf, Int32(15))
+            writeInt(&buf, Int32(23))
             FfiConverterTypeSessionInfo.write(session, into: &buf)
             
         
         case let .sessionRemoved(sessionId):
-            writeInt(&buf, Int32(16))
+            writeInt(&buf, Int32(24))
             FfiConverterString.write(sessionId, into: &buf)
             
         
+        case let .actionFailed(action,subjectId,message):
+            writeInt(&buf, Int32(25))
+            FfiConverterString.write(action, into: &buf)
+            FfiConverterString.write(subjectId, into: &buf)
+            FfiConverterString.write(message, into: &buf)
+            
+        
         case .minimizeMobileApp:
-            writeInt(&buf, Int32(17))
+            writeInt(&buf, Int32(26))
         
         }
     }
@@ -3492,6 +4189,31 @@ fileprivate struct FfiConverterSequenceTypeContactMatchInfo: FfiConverterRustBuf
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeHoldingInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [HoldingInfo]
+
+    public static func write(_ value: [HoldingInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeHoldingInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [HoldingInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [HoldingInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeHoldingInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeOutputSummary: FfiConverterRustBuffer {
     typealias SwiftType = [OutputSummary]
 
@@ -3649,7 +4371,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_login() != 52278) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_pay() != 61374) {
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_pay() != 53763) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_accept_sign() != 843) {
@@ -3664,7 +4386,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_open_link() != 52457) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_provide_asset_balance() != 17119) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_provide_receive_address() != 8495) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_register_fcm_token() != 65529) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_asset_balance() != 39433) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_fund() != 11764) {
@@ -3674,6 +4405,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_pay() != 25349) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_receive_address() != 23221) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lc_wallet_ffi_checksum_method_liquidconnectwallet_reject_sign() != 29787) {
