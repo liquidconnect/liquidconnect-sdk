@@ -22,6 +22,10 @@
 //! - [`recover_fill`]: a position back from one of the wallet's own fill
 //!   transactions and the note alone, with the script recomputed and
 //!   compared, so a wrong key or a tampered note yields nothing;
+//! - the reconstruction a restored wallet runs over its own history (spec
+//!   §8.1): [`recover_position`] per transaction, [`follow_position`] to
+//!   bring it to now through the wallet's own later steps, and
+//!   [`recover_claim`] / [`claim_coins`] for what a lender token is owed;
 //! - [`ContractRecord::render`]: the person-facing line, from verified
 //!   terms only, with the cutoff.
 //!
@@ -843,16 +847,80 @@ impl ContractStore {
     /// confirmation the record is closed as `not_broadcast` and its coin,
     /// which never existed, is dropped. Records without a creation time
     /// are left alone.
+    ///
+    /// Age alone does not say a transaction is missing: a wallet that was
+    /// not running when it confirmed has not seen it yet. A host calls this
+    /// only when every confirmation in its history has been applied; one
+    /// that learns of confirmations piecemeal asks its whole history per
+    /// transaction instead ([`Self::pending_txids`],
+    /// [`Self::fail_stale_pending_txid`]).
     pub fn fail_stale_pending(&mut self, now: u64, max_age_secs: u64) -> Vec<String> {
+        self.fail_stale_pending_where(now, max_age_secs, |_| true)
+    }
+
+    /// [`Self::fail_stale_pending`] for the records that wait on `txid`
+    /// alone: the host looked, and its complete history does not have it.
+    pub fn fail_stale_pending_txid(&mut self, txid: &Txid, now: u64, max_age_secs: u64) -> Vec<String> {
+        self.fail_stale_pending_where(now, max_age_secs, |r| r.coins.iter().any(|c| c.outpoint.txid == *txid))
+    }
+
+    fn fail_stale_pending_where(&mut self, now: u64, max_age_secs: u64, waits: impl Fn(&ContractRecord) -> bool) -> Vec<String> {
         let mut changed = Vec::new();
         for (key, r) in self.records.iter_mut() {
-            if r.status == ContractStatus::Pending && r.created_at > 0 && now.saturating_sub(r.created_at) > max_age_secs {
+            if r.status == ContractStatus::Pending && r.created_at > 0 && now.saturating_sub(r.created_at) > max_age_secs && waits(r) {
                 r.status = ContractStatus::Closed { path: "not_broadcast".to_owned() };
                 r.coins.clear();
                 changed.push(key.clone());
             }
         }
         changed
+    }
+
+    /// The transactions the pending records wait on, for the host to look
+    /// up in its own history: confirmed there, [`Self::confirm_txid`];
+    /// absent, [`Self::fail_stale_pending_txid`]; in the mempool, wait.
+    pub fn pending_txids(&self) -> Vec<Txid> {
+        let mut txids: Vec<Txid> = self
+            .records
+            .values()
+            .filter(|r| r.status == ContractStatus::Pending)
+            .flat_map(|r| r.coins.iter().map(|c| c.outpoint.txid))
+            .collect();
+        txids.sort();
+        txids.dedup();
+        txids
+    }
+
+    /// A record found again from the seed and the chain
+    /// ([`recover_position`], [`recover_claim`]). One the store lacks is
+    /// inserted. One the store had closed as never broadcast is replaced:
+    /// the chain has the transaction, so the wallet's guess was wrong; what
+    /// is the person's (the site's name, the hidden flag) stays. Any other
+    /// record the store holds was kept current by the wallet's own
+    /// approvals and is left alone. Returns the keys that changed.
+    pub fn restore(&mut self, mut record: ContractRecord, now: u64) -> Vec<String> {
+        let key = Self::key_of(&record);
+        let never_broadcast = ContractStatus::Closed { path: "not_broadcast".to_owned() };
+        match self.records.get(&key) {
+            None => self.apply(Derived::New(record), now),
+            Some(held) if held.status == never_broadcast => {
+                if record.domain.is_empty() {
+                    record.domain = held.domain.clone();
+                }
+                record.hidden = held.hidden;
+                record.created_at = held.created_at;
+                self.records.insert(key.clone(), record);
+                vec![key]
+            }
+            Some(_) => Vec::new(),
+        }
+    }
+
+    /// True for a record a rescan has nothing to add to: every one but
+    /// those closed as never broadcast, which the chain may contradict.
+    pub fn is_settled(&self, key: &str) -> bool {
+        let never_broadcast = ContractStatus::Closed { path: "not_broadcast".to_owned() };
+        self.records.get(key).is_some_and(|r| r.status != never_broadcast)
     }
 
     /// A record past its cutoff with its coin still unspent, as of `tip`.
@@ -875,6 +943,43 @@ impl ContractStore {
             }
             None => false,
         }
+    }
+
+    /// The coins at a lender token's claim script as the chain shows them
+    /// now ([`claim_coins`]). Other people's transactions pay there — an
+    /// exercise, a lapse, a leftover, an expire sweep — so the wallet's own
+    /// approvals only ever remove coins from a claim record; a lookup is
+    /// what adds them. Replaces the coin list; returns the keys that changed.
+    pub fn set_claim_coins(&mut self, lender_token: AssetId, coins: Vec<ContractCoin>) -> Vec<String> {
+        let mut changed = Vec::new();
+        for (key, r) in self.records.iter_mut() {
+            if Self::matches(r, &Select::ClaimByToken(lender_token)) && r.coins != coins {
+                r.coins = coins.clone();
+                changed.push(key.clone());
+            }
+        }
+        changed
+    }
+
+    /// The lender tokens of the claim records held, for the host's lookup.
+    pub fn claim_tokens(&self) -> Vec<AssetId> {
+        self.records
+            .values()
+            .filter_map(|r| match &r.params {
+                ContractParams::LendClaimV1 { lender_token } => Some(*lender_token),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The borrower tokens of the position records held: one-unit assets
+    /// the host need not look up as lender tokens.
+    pub fn borrower_tokens(&self) -> Vec<AssetId> {
+        self.records
+            .values()
+            .filter(|r| r.role == Role::Borrower)
+            .filter_map(|r| r.params.position().map(|t| t.borrower_nft))
+            .collect()
     }
 }
 
@@ -1110,6 +1215,261 @@ pub fn recover_fill(key: &NoteKey, tx: &elements::Transaction, cash: AssetId) ->
 }
 
 // ---------------------------------------------------------------------------
+// Reconstruction from the seed and the chain alone (spec §8.1 steps 1–3,
+// and step 4 for what the wallet's own history shows). A seed restore
+// recovers every transaction the wallet's scripts took part in; this is
+// what the host runs over them, with no relying party and no store.
+
+/// True when `tx` has an output shaped like a note: an OP_RETURN carrying
+/// exactly [`NOTE_LEN`] bytes. A cheap filter for a walk over a long
+/// history; only [`recover_fill`] says whether the note is this wallet's.
+pub fn carries_note(tx: &elements::Transaction) -> bool {
+    tx.output
+        .iter()
+        .any(|o| op_return_payload(&o.script_pubkey).is_some_and(|p| p.len() == NOTE_LEN))
+}
+
+/// One of the wallet's own transactions, as a rescan from the seed yields it.
+pub struct OwnTx<'a> {
+    pub tx: &'a elements::Transaction,
+    /// In a block; `false` while it waits in the mempool.
+    pub confirmed: bool,
+    /// The assets of the outputs of `tx` the wallet unblinded as its own.
+    /// One of them is the cash the fill paid out, which the note does not
+    /// repeat; a wrong one rebuilds no script, so every one is tried.
+    pub own_assets: &'a [AssetId],
+}
+
+/// Spec §8.1 step 2: the borrower position one of the wallet's own
+/// transactions created, as the record stood at creation — the same record
+/// [`derive`] made at approval, so a wallet that still has it finds nothing
+/// new. `None` for anything that is not a fill carrying this wallet's note.
+/// `domain` is empty after a restore from the chain alone: the note has no
+/// room for it, and a relying party's registration names it later.
+pub fn recover_position(key: &NoteKey, own: &OwnTx<'_>, domain: &str) -> Option<ContractRecord> {
+    if !carries_note(own.tx) {
+        return None;
+    }
+    let (params, coin) = own.own_assets.iter().find_map(|cash| recover_fill(key, own.tx, *cash))?;
+    let buyback = params.position()?.buyback;
+    let txid = own.tx.txid();
+    Some(ContractRecord {
+        contract_id: params.contract_id(),
+        params,
+        role: Role::Borrower,
+        domain: domain.to_owned(),
+        state: Some(buyback),
+        coins: vec![coin],
+        status: if own.confirmed { ContractStatus::Active } else { ContractStatus::Pending },
+        hidden: false,
+        history: vec![ContractEvent {
+            txid,
+            path: "fill".to_owned(),
+            state_after: Some(buyback),
+        }],
+        created_at: 0,
+    })
+}
+
+/// The wallet's own history as the follow step reads it.
+pub trait OwnHistory {
+    /// The wallet's own transaction that spends `outpoint`, if there is one.
+    fn spender(&self, outpoint: &OutPoint) -> Option<elements::Transaction>;
+}
+
+/// No position takes this many steps; the bound only stops a history that
+/// answers in circles.
+const MAX_FOLLOW_STEPS: usize = 256;
+
+fn explicit_txout(out: &elements::TxOut) -> Option<(AssetId, u64)> {
+    use elements::confidential::{Asset, Value};
+    match (out.asset, out.value) {
+        (Asset::Explicit(a), Value::Explicit(v)) => Some((a, v)),
+        _ => None,
+    }
+}
+
+/// Explicit `asset` that `tx` pays to `script`, summed.
+fn paid_to(tx: &elements::Transaction, script: &Script, asset: AssetId) -> u64 {
+    tx.output
+        .iter()
+        .filter(|o| o.script_pubkey == *script)
+        .filter_map(explicit_txout)
+        .filter(|(a, _)| *a == asset)
+        .fold(0u64, |sum, (_, v)| sum.saturating_add(v))
+}
+
+fn close_record(record: &mut ContractRecord, txid: Txid, path: &str, coin_spent: bool, state: Option<u64>) {
+    if coin_spent {
+        record.coins.clear();
+    }
+    if state.is_some() {
+        record.state = state;
+    }
+    record.status = ContractStatus::Closed { path: path.to_owned() };
+    record.history.push(ContractEvent {
+        txid,
+        path: path.to_owned(),
+        state_after: record.state,
+    });
+}
+
+/// Spec §8.1 step 4, as far as the wallet's own history reaches: bring a
+/// recovered borrower position from its creation to now. Every step the
+/// wallet signed is in its history — a buyback spends its token and the
+/// position together, a sale spends the token alone — and so is a venue's
+/// last look, which pays the borrower's share to a script of the wallet's.
+/// Each step is read from explicit amounts at the lender's claim script
+/// and checked by recomputing the continuing script (the follow rules of
+/// §6.3, no witness parsing). A lapse pays the borrower nothing, so it is in
+/// the history only of a wallet that is the lender as well; otherwise the
+/// record stays open here and expires by height.
+pub fn follow_position(record: &mut ContractRecord, history: &dyn OwnHistory) {
+    if record.role != Role::Borrower {
+        return;
+    }
+    let Some(t) = record.params.position().cloned() else {
+        return;
+    };
+    let Some(fill) = record.history.first().map(|e| e.txid) else {
+        return;
+    };
+    // Every position since v3 pays the claim script of its lender token;
+    // without that there is no script to read a payment at.
+    let claim = claim_script(t.lender_nft);
+    if script_hash(&claim) != t.payout {
+        return;
+    }
+    let mut token_at = Some(OutPoint::new(fill, FILL_BORROWER_NFT_OUTPUT as u32));
+    for _ in 0..MAX_FOLLOW_STEPS {
+        if matches!(record.status, ContractStatus::Closed { .. }) {
+            break;
+        }
+        let Some(coin) = record.coins.first().map(|c| c.outpoint) else {
+            break;
+        };
+        let debt = record.state.unwrap_or(t.buyback);
+        let (tx, with_token) = match token_at.and_then(|at| history.spender(&at)) {
+            Some(tx) => (tx, true),
+            None => match history.spender(&coin) {
+                Some(tx) => (tx, false),
+                None => break,
+            },
+        };
+        let txid = tx.txid();
+        let spends_coin = tx.input.iter().any(|i| i.previous_output == coin);
+        if with_token && !spends_coin {
+            // The token left without the position: the right was sold (or
+            // given away). The coin lives on; this wallet's part is over.
+            close_record(record, txid, "sold", false, None);
+            break;
+        }
+        let cash_paid = paid_to(&tx, &claim, t.cash);
+        if !with_token && cash_paid == 0 && paid_to(&tx, &claim, t.collateral) > 0 {
+            close_record(record, txid, "lapse", true, None);
+            break;
+        }
+        let path = if with_token { "exercise" } else { "last_look" };
+        let remaining = match debt.checked_sub(cash_paid) {
+            Some(remaining) if cash_paid > 0 => remaining,
+            _ => {
+                close_record(record, txid, "unknown", true, None);
+                break;
+            }
+        };
+        if remaining == 0 {
+            close_record(record, txid, path, true, Some(0));
+            break;
+        }
+        let next = record.params.script(Some(remaining)).ok().and_then(|script| {
+            tx.output.iter().enumerate().find_map(|(vout, o)| {
+                let (asset, amount) = explicit_txout(o)?;
+                (o.script_pubkey == script && asset == t.collateral).then(|| ContractCoin {
+                    outpoint: OutPoint::new(txid, vout as u32),
+                    asset,
+                    amount,
+                })
+            })
+        });
+        let Some(next) = next else {
+            close_record(record, txid, "unknown", true, None);
+            break;
+        };
+        record.coins = vec![next];
+        record.state = Some(remaining);
+        record.history.push(ContractEvent {
+            txid,
+            path: path.to_owned(),
+            state_after: Some(remaining),
+        });
+        if with_token {
+            token_at = tx.output.iter().enumerate().find_map(|(vout, o)| {
+                let (asset, amount) = explicit_txout(o)?;
+                (asset == t.borrower_nft && amount == 1 && op_return_payload(&o.script_pubkey).is_none())
+                    .then(|| OutPoint::new(txid, vout as u32))
+            });
+        }
+    }
+}
+
+/// Spec §8.1 step 3: the coins waiting at a lender token's claim script,
+/// from the script's whole history as the chain backend returns it (every
+/// transaction that paid the script or spent from it, mempool included).
+/// Explicit coins only. The script is a pure function of the token, so
+/// this needs nothing but the asset id the seed finds in the wallet.
+pub fn claim_coins(lender_token: AssetId, history: &[elements::Transaction]) -> Vec<ContractCoin> {
+    let script = claim_script(lender_token);
+    let spent: std::collections::BTreeSet<(Txid, u32)> = history
+        .iter()
+        .flat_map(|tx| tx.input.iter().map(|i| (i.previous_output.txid, i.previous_output.vout)))
+        .collect();
+    let mut coins: BTreeMap<(Txid, u32), ContractCoin> = BTreeMap::new();
+    for tx in history {
+        let txid = tx.txid();
+        for (vout, out) in tx.output.iter().enumerate() {
+            if out.script_pubkey != script || spent.contains(&(txid, vout as u32)) {
+                continue;
+            }
+            if let Some((asset, amount)) = explicit_txout(out) {
+                coins.insert(
+                    (txid, vout as u32),
+                    ContractCoin {
+                        outpoint: OutPoint::new(txid, vout as u32),
+                        asset,
+                        amount,
+                    },
+                );
+            }
+        }
+    }
+    coins.into_values().collect()
+}
+
+/// The claim record of a one-unit asset the restored wallet holds, from
+/// the history of its claim script. `None` when nothing ever paid that
+/// script: a borrower token has no such history, and a lender token that
+/// nothing has paid yet has nothing to collect — the next lookup finds it.
+pub fn recover_claim(lender_token: AssetId, history: &[elements::Transaction], domain: &str) -> Option<ContractRecord> {
+    let script = claim_script(lender_token);
+    if !history.iter().any(|tx| tx.output.iter().any(|o| o.script_pubkey == script)) {
+        return None;
+    }
+    let params = ContractParams::LendClaimV1 { lender_token };
+    Some(ContractRecord {
+        contract_id: params.contract_id(),
+        params,
+        role: Role::Lender,
+        domain: domain.to_owned(),
+        state: None,
+        coins: claim_coins(lender_token, history),
+        status: ContractStatus::Active,
+        hidden: false,
+        history: Vec::new(),
+        created_at: 0,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Rendering (spec §6.1)
 
 impl ContractStatus {
@@ -1135,10 +1495,15 @@ impl ContractStatus {
 }
 
 impl ContractRecord {
-    /// The person-facing line, from verified terms only, ending with the
-    /// cutoff: the block from which the person can recover alone.
+    /// The person-facing line, from verified terms only: the terms with
+    /// the cutoff, then the status.
     pub fn render(&self, collateral_symbol: &str, cash_symbol: &str) -> String {
-        let status = self.status.render();
+        format!("{} · {}", self.render_terms(collateral_symbol, cash_symbol), self.status.render())
+    }
+
+    /// The terms alone, for a host that shows the status in a place of its
+    /// own (the hub card printed it twice, 2026-09-17).
+    pub fn render_terms(&self, collateral_symbol: &str, cash_symbol: &str) -> String {
         match (&self.params, self.role) {
             (ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t), Role::Borrower) => {
                 let owed = self.state.unwrap_or(t.buyback);
@@ -1153,7 +1518,7 @@ impl ContractRecord {
                     String::new()
                 };
                 format!(
-                    "Sold {} {collateral_symbol} · {owed_text} until block {expiry}{last_look} · from block {expiry} the collateral goes to the lender · {status}",
+                    "Sold {} {collateral_symbol} · {owed_text} until block {expiry}{last_look} · from block {expiry} the collateral goes to the lender",
                     fmt8(t.size),
                     expiry = t.expiry
                 )
@@ -1161,7 +1526,7 @@ impl ContractRecord {
             (ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t), Role::Lender) => {
                 let owed = self.state.unwrap_or(t.buyback);
                 format!(
-                    "Bought {} {collateral_symbol} · the borrower may buy it back for {} {cash_symbol} until block {expiry} · from block {expiry} the collateral is yours · {status}",
+                    "Bought {} {collateral_symbol} · the borrower may buy it back for {} {cash_symbol} until block {expiry} · from block {expiry} the collateral is yours",
                     fmt8(t.size),
                     fmt8(owed),
                     expiry = t.expiry
@@ -1181,7 +1546,7 @@ impl ContractRecord {
                     })
                     .collect();
                 format!(
-                    "Lend offer on chain: {} {cash_symbol} remaining · {} · withdraw any time · after block {cutoff} it returns to your claim · {status}",
+                    "Lend offer on chain: {} {cash_symbol} remaining · {} · withdraw any time · after block {cutoff} it returns to your claim",
                     fmt8(remaining),
                     rows_text.join("; ")
                 )
@@ -1189,7 +1554,7 @@ impl ContractRecord {
             (ContractParams::LendClaimV1 { .. }, _) => {
                 let n = self.coins.len();
                 format!(
-                    "What your lending paid: {n} coin{} waiting · collect with your lender token · {status}",
+                    "What your lending paid: {n} coin{} waiting · collect with your lender token",
                     if n == 1 { "" } else { "s" }
                 )
             }
@@ -2006,5 +2371,440 @@ mod tests {
         .unwrap();
         assert!(derived.is_empty());
         assert_eq!(funded_txid(&b64(&tx)).unwrap(), tx.extract_tx().unwrap().txid());
+    }
+
+    // -----------------------------------------------------------------------
+    // Reconstruction (spec §8.1). Layouts as the paper venue builds them on
+    // testnet (position 52's fill, its sold right, position 51's buyback,
+    // 2026-09-17): a full buyback burns the token at output 0 and pays the
+    // claim script at output 1; a partial one returns the token at 0,
+    // continues the position at 1 and pays the claim script after it; a
+    // sale spends the token alone.
+
+    /// The wallet's own history for the follow step.
+    struct History(Vec<elements::Transaction>);
+    impl OwnHistory for History {
+        fn spender(&self, outpoint: &OutPoint) -> Option<elements::Transaction> {
+            self.0.iter().find(|tx| tx.input.iter().any(|i| i.previous_output == *outpoint)).cloned()
+        }
+    }
+
+    fn spend(txid: elements::Txid, vout: u32) -> pset::Input {
+        pset::Input::from_prevout(OutPoint::new(txid, vout))
+    }
+    fn fresh(txid_byte: u8, vout: u32) -> pset::Input {
+        spend(elements::Txid::from_str(&format!("{txid_byte:02x}").repeat(32)).unwrap(), vout)
+    }
+    fn out(asset_hex: &str, value: u64, script: Script) -> pset::Output {
+        pset::Output::from_txout(txout(asset_hex, value, script))
+    }
+    fn burn() -> Script {
+        Script::from(hex::decode("6a046275726e").unwrap())
+    }
+
+    /// A v4 fill this wallet funded, note and all, with the terms it created.
+    fn noted_v4_fill() -> (elements::Transaction, ContractParams) {
+        let lastlook = [11u8; 32];
+        let payout = payout_of(LENDER_TOKEN);
+        let params = ContractParams::LendPositionV4(position_terms(&payout, &lastlook));
+        let template = funded_v4_fill(&payout, &lastlook, None);
+        let input0 = template_input0(&b64(&template)).unwrap();
+        let sealed = note_for_fill(&key(), &params, &input0).unwrap().unwrap();
+        (funded_v4_fill(&payout, &lastlook, Some(sealed)).extract_tx().unwrap(), params)
+    }
+
+    /// A buyback of `pay` against the position at `(from, coin_vout)` with
+    /// the token at `(from, token_vout)`; `remaining` is what stays owed.
+    fn buyback(params: &ContractParams, from: elements::Txid, token_vout: u32, coin_vout: u32, pay: u64, remaining: u64) -> elements::Transaction {
+        let claim = claim_script(asset(LENDER_TOKEN));
+        let mut tx = pset::PartiallySignedTransaction::new_v2();
+        tx.add_input(spend(from, token_vout)); // 0 the wallet's position token
+        tx.add_input(spend(from, coin_vout)); // 1 the position
+        tx.add_input(fresh(0x53, 0)); // 2 the wallet's cash
+        if remaining > 0 {
+            tx.add_output(out(NFT, 1, spk(0x01))); // 0 token back
+            tx.add_output(out(LBTC, 1_000_000, params.script(Some(remaining)).unwrap())); // 1 the position continues
+        } else {
+            tx.add_output(out(NFT, 1, burn())); // 0 token burned
+        }
+        tx.add_output(out(USDT, pay, claim)); // cash to the lender's claim script
+        tx.add_output(out(LBTC, 1_000_000, spk(0x01))); // released collateral → mine
+        tx.add_output(out(LBTC, 300, Script::new())); // fee
+        tx.extract_tx().unwrap()
+    }
+
+    #[test]
+    fn a_restored_wallet_finds_its_fill_again_from_its_own_history() {
+        let (fill, params) = noted_v4_fill();
+        let lastlook = [11u8; 32];
+        let payout = payout_of(LENDER_TOKEN);
+        let bare = funded_v4_fill(&payout, &lastlook, None).extract_tx().unwrap();
+        assert!(carries_note(&fill));
+        assert!(!carries_note(&bare));
+
+        // The rescan knows the assets of the fill's outputs that are the
+        // wallet's: its token, the cash it was paid, its change.
+        let own_assets = [asset(NFT), asset(LBTC), asset(USDT)];
+        let own = OwnTx { tx: &fill, confirmed: true, own_assets: &own_assets };
+        let record = recover_position(&key(), &own, "").expect("the fill is found again");
+        assert_eq!(record.params, params);
+        assert_eq!(record.role, Role::Borrower);
+        assert_eq!(record.state, Some(1_242_00000000));
+        assert_eq!(record.status, ContractStatus::Active);
+        assert_eq!(record.domain, "");
+        assert_eq!(record.coins, vec![ContractCoin { outpoint: OutPoint::new(fill.txid(), 0), asset: asset(LBTC), amount: 2_000_000 }]);
+        assert_eq!(record.history.len(), 1);
+
+        // It is the record the approval derived, under the same key: a
+        // wallet that never lost its store finds nothing new.
+        let claim = TypedFund::FillV4 {
+            size: 2_000_000,
+            sale: 1_200_00000000,
+            buyback: 1_242_00000000,
+            expiry: 2_600_984,
+            cash: asset(USDT),
+            collateral: Some(asset(LBTC)),
+            fee: 3_00000000,
+            payout,
+            lastlook,
+            lastlook_height: 2_600_484,
+        };
+        let input0 = template_input0(&b64(&funded_v4_fill(&payout, &lastlook, None))).unwrap();
+        let sealed = note_for_fill(&key(), &params, &input0).unwrap().unwrap();
+        let derived = derive(&FundContext {
+            claim: &claim,
+            funded_pset_b64: &b64(&funded_v4_fill(&payout, &lastlook, Some(sealed))),
+            domain: "paper.swaption.io",
+            policy_asset: asset(LBTC),
+            mine: &[1, 3, 8],
+            owned: &[],
+        })
+        .unwrap();
+        let mut store = ContractStore::default();
+        let live_key = store.apply(derived[0].clone(), 1_000).remove(0);
+        assert_eq!(ContractStore::key_of(&record), live_key);
+        assert!(store.apply(Derived::New(record.clone()), 2_000).is_empty());
+        assert_eq!(store.get(&live_key).unwrap().domain, "paper.swaption.io");
+        assert_eq!(store.borrower_tokens(), vec![asset(NFT)]);
+
+        // Still in the mempool: pending, like an approval.
+        let waiting = recover_position(&key(), &OwnTx { tx: &fill, confirmed: false, own_assets: &own_assets }, "").unwrap();
+        assert_eq!(waiting.status, ContractStatus::Pending);
+        // The cash not among the wallet's assets, another seed, or no note: nothing, never a wrong record.
+        assert!(recover_position(&key(), &OwnTx { tx: &fill, confirmed: true, own_assets: &[asset(NFT), asset(LBTC)] }, "").is_none());
+        assert!(recover_position(&NoteKey::from_secret([8u8; 32]), &own, "").is_none());
+        assert!(recover_position(&key(), &OwnTx { tx: &bare, confirmed: true, own_assets: &own_assets }, "").is_none());
+    }
+
+    #[test]
+    fn following_the_wallets_own_history_replays_a_partial_and_a_full_buyback() {
+        let (fill, _) = noted_v4_fill();
+        let own_assets = [asset(NFT), asset(LBTC), asset(USDT)];
+        let recovered = recover_position(&key(), &OwnTx { tx: &fill, confirmed: true, own_assets: &own_assets }, "").unwrap();
+        let params = recovered.params.clone();
+        let half = 621_00000000u64;
+        let partial = buyback(&params, fill.txid(), 1, 0, half, half);
+        let full = buyback(&params, partial.txid(), 0, 1, half, 0);
+
+        // Nothing later in the history: the record stands as created.
+        let mut untouched = recovered.clone();
+        follow_position(&mut untouched, &History(vec![fill.clone()]));
+        assert_eq!(untouched, recovered);
+
+        // A partial buyback moves the coin and the debt.
+        let mut moved = recovered.clone();
+        follow_position(&mut moved, &History(vec![fill.clone(), partial.clone()]));
+        assert_eq!(moved.state, Some(half));
+        assert_eq!(moved.status, ContractStatus::Active);
+        assert_eq!(moved.coins, vec![ContractCoin { outpoint: OutPoint::new(partial.txid(), 1), asset: asset(LBTC), amount: 1_000_000 }]);
+        assert_eq!(moved.history.len(), 2);
+        assert_eq!(moved.history[1].path, "exercise");
+        assert!(moved.render("BTC", "USDt").contains("621 USDt still owed"), "{}", moved.render("BTC", "USDt"));
+
+        // The full buyback after it closes the record, whatever order the history comes in.
+        let mut closed = recovered.clone();
+        follow_position(&mut closed, &History(vec![full.clone(), partial.clone(), fill.clone()]));
+        assert_eq!(closed.status, ContractStatus::Closed { path: "exercise".to_owned() });
+        assert_eq!(closed.state, Some(0));
+        assert!(closed.coins.is_empty());
+        assert_eq!(closed.history.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(), vec!["fill", "exercise", "exercise"]);
+
+        // A buyback that pays the claim script nothing, or whose continuing
+        // script does not rebuild, explains nothing: closed as unknown, never a wrong state.
+        let lying = buyback(&params, fill.txid(), 1, 0, half, half - 1);
+        let mut unknown = recovered.clone();
+        follow_position(&mut unknown, &History(vec![lying]));
+        assert_eq!(unknown.status, ContractStatus::Closed { path: "unknown".to_owned() });
+        assert!(unknown.coins.is_empty());
+    }
+
+    #[test]
+    fn a_sold_right_a_last_look_and_a_lapse_close_a_recovered_position() {
+        let (fill, _) = noted_v4_fill();
+        let own_assets = [asset(NFT), asset(LBTC), asset(USDT)];
+        let recovered = recover_position(&key(), &OwnTx { tx: &fill, confirmed: true, own_assets: &own_assets }, "").unwrap();
+        let claim = claim_script(asset(LENDER_TOKEN));
+
+        // The token leaves alone: the right was sold. The coin lives on.
+        let mut sale = pset::PartiallySignedTransaction::new_v2();
+        sale.add_input(spend(fill.txid(), 1)); // 0 the position token
+        sale.add_input(fresh(0x92, 0)); // 1 the venue's cash
+        sale.add_input(fresh(0x93, 0)); // 2 the wallet's fee input
+        sale.add_output(out(NFT, 1, spk(0xaa))); // 0 the token → the venue
+        sale.add_output(out(USDT, 50_00000000, spk(0x01))); // 1 the price → mine
+        sale.add_output(out(LBTC, 250, Script::new())); // fee
+        let sale = sale.extract_tx().unwrap();
+        let mut sold = recovered.clone();
+        follow_position(&mut sold, &History(vec![sale.clone()]));
+        assert_eq!(sold.status, ContractStatus::Closed { path: "sold".to_owned() });
+        assert_eq!(sold.coins, recovered.coins);
+        assert_eq!(sold.state, recovered.state);
+        assert_eq!(sold.history.last().unwrap().txid, sale.txid());
+
+        // The venue's last look: the position spent without the token, the
+        // debt paid to the claim script, the borrower's share to the wallet.
+        let mut look = pset::PartiallySignedTransaction::new_v2();
+        look.add_input(spend(fill.txid(), 0)); // 0 the position
+        look.add_input(fresh(0x94, 0)); // 1 the venue's coin at the last-look script
+        look.add_output(out(USDT, 1_242_00000000, claim.clone())); // the debt → the lender's claim
+        look.add_output(out(USDT, 40_00000000, spk(0x01))); // the borrower's share → mine
+        look.add_output(out(LBTC, 250, Script::new())); // fee
+        let mut looked = recovered.clone();
+        follow_position(&mut looked, &History(vec![look.extract_tx().unwrap()]));
+        assert_eq!(looked.status, ContractStatus::Closed { path: "last_look".to_owned() });
+        assert!(looked.coins.is_empty());
+        assert_eq!(looked.render("BTC", "USDt").rsplit(" · ").next(), Some("exercised for you by the venue"));
+
+        // A lapse seen by a wallet that is the lender too: the collateral to the claim script.
+        let mut lapse = pset::PartiallySignedTransaction::new_v2();
+        lapse.add_input(spend(fill.txid(), 0)); // 0 the position
+        lapse.add_input(fresh(0x95, 0)); // 1 the sweeper's fee coin
+        lapse.add_output(out(LBTC, 2_000_000, claim.clone())); // everything → the lender's claim
+        lapse.add_output(out(LBTC, 250, Script::new())); // fee
+        let mut lapsed = recovered.clone();
+        follow_position(&mut lapsed, &History(vec![lapse.extract_tx().unwrap()]));
+        assert_eq!(lapsed.status, ContractStatus::Closed { path: "lapse".to_owned() });
+        assert_eq!(lapsed.state, recovered.state);
+        assert!(lapsed.coins.is_empty());
+    }
+
+    #[test]
+    fn a_lender_tokens_claim_coins_come_back_from_the_scripts_history() {
+        let token = asset(LENDER_TOKEN);
+        let claim = claim_script(token);
+        // An exercise paid cash there, a lapse paid collateral, and one of
+        // the two was collected since.
+        let mut exercise = pset::PartiallySignedTransaction::new_v2();
+        exercise.add_input(fresh(0xa1, 0));
+        exercise.add_output(out(NFT, 1, burn()));
+        exercise.add_output(out(USDT, 1_242_00000000, claim.clone()));
+        exercise.add_output(out(LBTC, 300, Script::new()));
+        let exercise = exercise.extract_tx().unwrap();
+        let mut lapse = pset::PartiallySignedTransaction::new_v2();
+        lapse.add_input(fresh(0xa2, 0));
+        lapse.add_output(out(LBTC, 2_000_000, claim.clone()));
+        lapse.add_output(out(LBTC, 300, Script::new()));
+        let lapse = lapse.extract_tx().unwrap();
+        let mut collect = pset::PartiallySignedTransaction::new_v2();
+        collect.add_input(fresh(0xa3, 1)); // 0 the lender token
+        collect.add_input(spend(exercise.txid(), 1)); // 1 the claim coin
+        collect.add_output(out(LENDER_TOKEN, 1, spk(0x01)));
+        collect.add_output(out(USDT, 1_242_00000000, spk(0x01)));
+        collect.add_output(out(LBTC, 300, Script::new()));
+        let collect = collect.extract_tx().unwrap();
+
+        let waiting = ContractCoin { outpoint: OutPoint::new(lapse.txid(), 0), asset: asset(LBTC), amount: 2_000_000 };
+        let paid = ContractCoin { outpoint: OutPoint::new(exercise.txid(), 1), asset: asset(USDT), amount: 1_242_00000000 };
+        let mut both = claim_coins(token, &[exercise.clone(), lapse.clone()]);
+        both.sort_by_key(|c| c.amount);
+        assert_eq!(both, vec![waiting.clone(), paid]);
+        assert_eq!(claim_coins(token, &[collect.clone(), exercise.clone(), lapse.clone()]), vec![waiting.clone()]);
+        // Another token's script is another script.
+        assert!(claim_coins(asset(NFT), &[exercise.clone(), lapse.clone()]).is_empty());
+
+        // A one-unit asset whose claim script has no history is no lender
+        // token the wallet is owed on (a borrower token looks like this).
+        assert!(recover_claim(asset(NFT), &[], "").is_none());
+        assert!(recover_claim(asset(NFT), &[exercise.clone()], "").is_none());
+        let record = recover_claim(token, &[exercise.clone(), lapse.clone(), collect.clone()], "").expect("the claim record");
+        assert_eq!(record.params, ContractParams::LendClaimV1 { lender_token: token });
+        assert_eq!(record.role, Role::Lender);
+        assert_eq!(record.status, ContractStatus::Active);
+        assert_eq!(record.coins, vec![waiting.clone()]);
+        // Everything collected: the record stays, empty.
+        let mut sweep = pset::PartiallySignedTransaction::new_v2();
+        sweep.add_input(fresh(0xa4, 1));
+        sweep.add_input(spend(lapse.txid(), 0));
+        sweep.add_output(out(LBTC, 1_999_700, spk(0x01)));
+        let sweep = sweep.extract_tx().unwrap();
+        let empty = recover_claim(token, &[exercise.clone(), lapse.clone(), collect.clone(), sweep], "").unwrap();
+        assert!(empty.coins.is_empty());
+
+        // The store takes the lookup's word for a claim record it holds.
+        let mut store = ContractStore::default();
+        let key = store.apply(Derived::New(empty), 1).remove(0);
+        assert_eq!(store.claim_tokens(), vec![token]);
+        assert_eq!(store.set_claim_coins(token, vec![waiting.clone()]), vec![key.clone()]);
+        assert!(store.set_claim_coins(token, vec![waiting.clone()]).is_empty());
+        assert!(store.set_claim_coins(asset(NFT), vec![waiting.clone()]).is_empty());
+        assert_eq!(store.get(&key).unwrap().coins, vec![waiting]);
+        assert_eq!(store.get(&key).unwrap().render("", ""), "What your lending paid: 1 coin waiting · collect with your lender token · active");
+    }
+
+    /// A phone is in the background seconds after an approval, and by the
+    /// time it is opened again the fill is deep in the chain: the pending
+    /// record is settled by asking the wallet's whole history, and "never
+    /// reached the chain" is said only of a transaction that history lacks.
+    #[test]
+    fn a_pending_record_is_settled_by_the_wallets_whole_history() {
+        let (fill, _) = noted_v4_fill();
+        let own_assets = [asset(USDT)];
+        let waiting = recover_position(&key(), &OwnTx { tx: &fill, confirmed: false, own_assets: &own_assets }, "paper.swaption.io").unwrap();
+        let mut store = ContractStore::default();
+        let k = store.apply(Derived::New(waiting.clone()), 10_000).remove(0);
+        assert_eq!(store.pending_txids(), vec![fill.txid()]);
+        assert!(!store.is_settled("nope"));
+        assert!(store.is_settled(&k));
+
+        // Another transaction missing says nothing about this record; nor does youth.
+        let other = elements::Txid::from_str(&"ee".repeat(32)).unwrap();
+        assert!(store.fail_stale_pending_txid(&other, 99_999, 3_600).is_empty());
+        assert!(store.fail_stale_pending_txid(&fill.txid(), 10_000 + 3_600, 3_600).is_empty());
+        // Hours later the history has it confirmed: active, whatever its age.
+        let mut seen = store.clone();
+        assert_eq!(seen.confirm_txid(&fill.txid()), vec![k.clone()]);
+        assert!(seen.pending_txids().is_empty());
+        assert!(seen.fail_stale_pending_txid(&fill.txid(), 99_999, 3_600).is_empty());
+        // The history lacks it and the hour has passed: never reached the chain.
+        assert_eq!(store.fail_stale_pending_txid(&fill.txid(), 10_000 + 3_601, 3_600), vec![k.clone()]);
+        assert!(store.pending_txids().is_empty());
+        assert!(!store.is_settled(&k));
+        store.set_hidden(&k, true);
+
+        // A rescan that finds the fill on chain after all puts the record
+        // right and keeps what is the person's; a live record is left alone.
+        let found = recover_position(&key(), &OwnTx { tx: &fill, confirmed: true, own_assets: &own_assets }, "").unwrap();
+        assert_eq!(store.restore(found.clone(), 20_000), vec![k.clone()]);
+        let r = store.get(&k).unwrap();
+        assert_eq!(r.status, ContractStatus::Active);
+        assert_eq!(r.coins, found.coins);
+        assert_eq!(r.domain, "paper.swaption.io");
+        assert!(r.hidden);
+        assert_eq!(r.created_at, 10_000);
+        assert!(store.is_settled(&k));
+        assert!(store.restore(found.clone(), 30_000).is_empty());
+        // And a store that never had it takes it as found.
+        let mut empty = ContractStore::default();
+        assert_eq!(empty.restore(found, 40_000), vec![k.clone()]);
+        assert_eq!(empty.get(&k).unwrap().domain, "");
+        assert_eq!(empty.get(&k).unwrap().created_at, 40_000);
+    }
+
+    // -----------------------------------------------------------------------
+    // The venue's own transactions (Liquid testnet, paper.swaption.io,
+    // 2026-09-17; src/testdata/README.md), so that what the fixtures above
+    // assume about layouts is what a venue builds. Terms from the lending
+    // server's books.
+
+    fn real_tx(hex_str: &str, txid: &str) -> elements::Transaction {
+        let tx: elements::Transaction = elements::encode::deserialize(&hex::decode(hex_str.trim()).unwrap()).unwrap();
+        assert_eq!(tx.txid().to_string(), txid);
+        tx
+    }
+
+    fn sha(script_hex: &str) -> [u8; 32] {
+        script_hash(&Script::from(hex::decode(script_hex).unwrap()))
+    }
+
+    /// A position of the paper venue's as the wallet records it at the fill.
+    fn paper_position(fill: &elements::Transaction, buyback: u64, borrower_nft: &str, lender_nft: &str, borrower_script: &str, payout_script: &str) -> ContractRecord {
+        let params = ContractParams::LendPositionV4(PositionTerms {
+            collateral: asset(LBTC),
+            cash: asset(USDT),
+            size: 1_000_000,
+            buyback,
+            expiry: 2_632_781,
+            borrower_nft: asset(borrower_nft),
+            lender_nft: asset(lender_nft),
+            payout: sha(payout_script),
+            borrower_payout: sha(borrower_script),
+            lastlook: sha("001432c4fbef1dd471fca2d52a6f8654e4a39d96ba2c"),
+            lastlook_height: 2_632_766,
+        });
+        // The terms rebuild the coin on chain, and the lender is paid at
+        // the claim script of its token: what the follow step reads by.
+        assert_eq!(hex::encode(params.script(Some(buyback)).unwrap().as_bytes()), hex::encode(fill.output[0].script_pubkey.as_bytes()));
+        assert_eq!(hex::encode(claim_script(asset(lender_nft)).as_bytes()), payout_script);
+        let Derived::New(record) = new_position(params, fill.txid(), "paper.swaption.io") else {
+            unreachable!("new_position yields a new record")
+        };
+        record
+    }
+
+    #[test]
+    fn the_paper_venues_real_transactions_follow_as_the_fixtures_do() {
+        let fill51 = real_tx(
+            include_str!("testdata/paper-testnet-2026-09-17-fill51.nowitness.hex"),
+            "1083eed00824b5e1852097e8994fc0088cb6506771930a446afea7e93230216b",
+        );
+        let buyback51 = real_tx(
+            include_str!("testdata/paper-testnet-2026-09-17-buyback51.nowitness.hex"),
+            "2fdd553413f9ad32708d2ffc88e5a33164f04dd45fa39b241071576633b6f7ef",
+        );
+        let fill52 = real_tx(
+            include_str!("testdata/paper-testnet-2026-09-17-fill52.nowitness.hex"),
+            "c5cfe2b4ef68528cc9d4b8b86edbba623586c016f50eec04fd4796622e6a7115",
+        );
+        let sellright52 = real_tx(
+            include_str!("testdata/paper-testnet-2026-09-17-sellright52.nowitness.hex"),
+            "0a05f392712d98cfac58b72d4e4b760fc700ffcaf417a0404b55df5bf2814d06",
+        );
+
+        // Position 51: filled before the wallet wrote notes, bought back in full.
+        assert!(!carries_note(&fill51));
+        let mut p51 = paper_position(
+            &fill51,
+            456_85276800,
+            "b29c1ca49115a770e304c57af9871dfe61835bf98fe8c7f62a0cc7308358f183",
+            "03c5b3692f0051c5075c8b3ddd3ea68e51cd05d12b1d5f1e9ff3c80e10915a7e",
+            "0014b0a920bbed9e09fc64fa3cc50c4e5ea6e801c907",
+            "512080f7930adc0dbb8df44c73de3f3f52199b057dcfea6da49b48b34ea748a7d483",
+        );
+        follow_position(&mut p51, &History(vec![fill51.clone(), buyback51.clone()]));
+        assert_eq!(p51.status, ContractStatus::Closed { path: "exercise".to_owned() });
+        assert_eq!(p51.state, Some(0));
+        assert!(p51.coins.is_empty());
+        assert_eq!(p51.history.last().unwrap().txid, buyback51.txid());
+
+        // Position 52: the first fill to carry a note — sealed under the
+        // phone's seed, so not this key's to open — and its right sold
+        // eighteen seconds later. The venue bought it back afterwards; that
+        // is no longer this wallet's business.
+        assert!(carries_note(&fill52));
+        assert!(recover_position(&key(), &OwnTx { tx: &fill52, confirmed: true, own_assets: &[asset(USDT)] }, "").is_none());
+        let mut p52 = paper_position(
+            &fill52,
+            461_17756200,
+            "0a7a3a011b06d571cf4fdf53e10e0fab14cf4571d7fcf4b06b589455c69dd72f",
+            "d49cfb9aef7644c6a35cafc97238643069a540483b69a79b4df6897a9331f772",
+            "001434669754d0ffc82a91f03f72459cf07fd0ade5e6",
+            "5120a438622cbec3e5133d4dbbe072475c61212981999b0e65accec503c70f2c55ee",
+        );
+        let created = p52.clone();
+        follow_position(&mut p52, &History(vec![sellright52.clone(), fill52.clone()]));
+        assert_eq!(p52.status, ContractStatus::Closed { path: "sold".to_owned() });
+        assert_eq!(p52.coins, created.coins);
+        assert_eq!(p52.history.last().unwrap().txid, sellright52.txid());
+    }
+
+    #[test]
+    fn render_is_the_terms_and_then_the_status() {
+        let (fill, _) = noted_v4_fill();
+        let own_assets = [asset(USDT)];
+        let record = recover_position(&key(), &OwnTx { tx: &fill, confirmed: false, own_assets: &own_assets }, "").unwrap();
+        let terms = record.render_terms("BTC", "USDt");
+        assert!(terms.ends_with("from block 2600984 the collateral goes to the lender"), "{terms}");
+        assert!(!terms.contains("awaiting"), "{terms}");
+        assert_eq!(record.render("BTC", "USDt"), format!("{terms} · awaiting confirmation"));
     }
 }
