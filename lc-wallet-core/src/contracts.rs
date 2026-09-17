@@ -362,6 +362,12 @@ pub struct ContractRecord {
     /// Wallet-local; never sent anywhere.
     pub hidden: bool,
     pub history: Vec<ContractEvent>,
+    /// When the host stored the record (unix seconds; 0 = unknown). A
+    /// pending record that never confirms is closed by its age
+    /// ([`ContractStore::fail_stale_pending`]): the relying party
+    /// broadcasts, so an approval is not yet a transaction on chain.
+    #[serde(default)]
+    pub created_at: u64,
 }
 
 /// Which stored record a transition applies to. The host keys its store
@@ -511,6 +517,7 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
                     path: "post".to_owned(),
                     state_after: state,
                 }],
+                created_at: 0,
             }));
             let claim_params = ContractParams::LendClaimV1 { lender_token: *lender_token };
             out.push(Derived::New(ContractRecord {
@@ -523,6 +530,7 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
                 status: ContractStatus::Active,
                 hidden: false,
                 history: Vec::new(),
+                created_at: 0,
             }));
         }
         TypedFund::Exercise {
@@ -708,6 +716,7 @@ fn new_position(params: ContractParams, txid: Txid, domain: &str) -> Derived {
             path: "fill".to_owned(),
             state_after: Some(buyback),
         }],
+        created_at: 0,
     })
 }
 
@@ -762,14 +771,16 @@ impl ContractStore {
 
     /// Apply what an accepted step derived; returns the keys of the records
     /// that changed. A `New` of a record already held changes nothing (an
-    /// offer post repeats the claim record of the same token).
-    pub fn apply(&mut self, derived: Derived) -> Vec<String> {
+    /// offer post repeats the claim record of the same token). `now` is
+    /// the host's clock in unix seconds, stamped on a new record.
+    pub fn apply(&mut self, derived: Derived, now: u64) -> Vec<String> {
         match derived {
-            Derived::New(record) => {
+            Derived::New(mut record) => {
                 let key = Self::key_of(&record);
                 if self.records.contains_key(&key) {
                     return Vec::new();
                 }
+                record.created_at = now;
                 self.records.insert(key.clone(), record);
                 vec![key]
             }
@@ -819,6 +830,25 @@ impl ContractStore {
         for (key, r) in self.records.iter_mut() {
             if r.status == ContractStatus::Pending && r.coins.iter().any(|c| c.outpoint.txid == *txid) {
                 r.status = ContractStatus::Active;
+                changed.push(key.clone());
+            }
+        }
+        changed
+    }
+
+    /// A pending record whose transaction never reached the chain. The
+    /// relying party broadcasts, not the wallet, so an approval can die
+    /// after the wallet recorded it (a mempool conflict, a venue that
+    /// re-checked its half and declined): past `max_age_secs` without a
+    /// confirmation the record is closed as `not_broadcast` and its coin,
+    /// which never existed, is dropped. Records without a creation time
+    /// are left alone.
+    pub fn fail_stale_pending(&mut self, now: u64, max_age_secs: u64) -> Vec<String> {
+        let mut changed = Vec::new();
+        for (key, r) in self.records.iter_mut() {
+            if r.status == ContractStatus::Pending && r.created_at > 0 && now.saturating_sub(r.created_at) > max_age_secs {
+                r.status = ContractStatus::Closed { path: "not_broadcast".to_owned() };
+                r.coins.clear();
                 changed.push(key.clone());
             }
         }
@@ -1097,6 +1127,7 @@ impl ContractStatus {
                 "expire" => "returned to your claim".to_owned(),
                 "fill" => "filled".to_owned(),
                 "collect" => "collected".to_owned(),
+                "not_broadcast" => "never reached the chain".to_owned(),
                 other => format!("closed ({other})"),
             },
         }
@@ -1741,13 +1772,16 @@ mod tests {
         };
         let mut store = ContractStore::default();
         let derived = derive(&ctx).unwrap();
-        let keys = store.apply(derived[0].clone());
+        let keys = store.apply(derived[0].clone(), 1_000);
         assert_eq!(keys.len(), 1);
         let key = keys[0].clone();
         assert_eq!(key, hex::encode(position_params(&payout, &lastlook).contract_id()));
+        assert_eq!(store.get(&key).unwrap().created_at, 1_000);
         // The same derivation again changes nothing.
-        assert!(store.apply(derived[0].clone()).is_empty());
+        assert!(store.apply(derived[0].clone(), 2_000).is_empty());
         assert_eq!(store.get(&key).unwrap().status, ContractStatus::Pending);
+        // Young and pending: left alone. (Its staleness is tested below.)
+        assert!(store.fail_stale_pending(1_000 + 3_600, 3_600).is_empty());
         // The fill confirms in the wallet's history.
         assert_eq!(store.confirm_txid(&fill_txid), vec![key.clone()]);
         assert_eq!(store.get(&key).unwrap().status, ContractStatus::Active);
@@ -1773,7 +1807,7 @@ mod tests {
             owned: &owned,
         })
         .unwrap();
-        assert_eq!(store.apply(derived[0].clone()), vec![key.clone()]);
+        assert_eq!(store.apply(derived[0].clone(), 3_000), vec![key.clone()]);
         let r = store.get(&key).unwrap();
         assert_eq!(r.state, Some(621_00000000));
         assert_eq!(r.coins, vec![ContractCoin { outpoint: OutPoint::new(exercise_txid, 1), asset: asset(LBTC), amount: 1_000_000 }]);
@@ -1794,6 +1828,47 @@ mod tests {
         assert!(json.contains(r#""kind":"sw/lend/position/v5""#), "{json}");
         let back: ContractStore = serde_json::from_str(&json).unwrap();
         assert_eq!(back, store);
+        // A store written before `created_at` existed still parses.
+        let old = json.replace(r#""created_at":1000"#, r#""created_at":0"#).replace(r#","created_at":0"#, "");
+        let parsed: ContractStore = serde_json::from_str(&old).unwrap();
+        assert_eq!(parsed.get(&key).unwrap().created_at, 0);
+    }
+
+    /// The relying party broadcasts: an approved fill whose transaction
+    /// never reaches the chain (Scott's second fill of 2026-09-17 died of
+    /// `txn-mempool-conflict`) must not stay "awaiting confirmation".
+    #[test]
+    fn a_pending_record_that_never_confirms_is_closed_by_its_age() {
+        let lastlook = [11u8; 32];
+        let payout = payout_of(LENDER_TOKEN);
+        let claim = v6_claim(&payout, &lastlook);
+        let funded = funded_v6_fill(&payout, &lastlook, None);
+        let derived = derive(&FundContext {
+            claim: &claim,
+            funded_pset_b64: &b64(&funded),
+            domain: "paper.swaption.io",
+            policy_asset: asset(LBTC),
+            mine: &[1, 4, 7],
+            owned: &[],
+        })
+        .unwrap();
+        let mut store = ContractStore::default();
+        let key = store.apply(derived[0].clone(), 10_000).remove(0);
+        assert!(store.fail_stale_pending(10_000 + 3_600, 3_600).is_empty());
+        assert_eq!(store.fail_stale_pending(10_000 + 3_601, 3_600), vec![key.clone()]);
+        let r = store.get(&key).unwrap();
+        assert_eq!(r.status, ContractStatus::Closed { path: "not_broadcast".to_owned() });
+        assert!(r.coins.is_empty());
+        assert!(r.render("BTC", "USDt").ends_with("never reached the chain"), "{}", r.render("BTC", "USDt"));
+        // Closed stays closed; a confirmation of that txid later changes nothing.
+        assert!(store.fail_stale_pending(99_999, 3_600).is_empty());
+        assert!(store.confirm_txid(&funded.extract_tx().unwrap().txid()).is_empty());
+        // A confirmed record is never failed by age.
+        let mut live = ContractStore::default();
+        let key = live.apply(derived[0].clone(), 10_000).remove(0);
+        live.confirm_txid(&funded.extract_tx().unwrap().txid());
+        assert!(live.fail_stale_pending(10_000 + 86_400, 3_600).is_empty());
+        assert_eq!(live.get(&key).unwrap().status, ContractStatus::Active);
     }
 
     #[test]
@@ -1809,10 +1884,11 @@ mod tests {
             status: ContractStatus::Active,
             hidden: false,
             history: Vec::new(),
+            created_at: 0,
         };
         let mut store = ContractStore::default();
-        assert_eq!(store.apply(Derived::New(record(claim.clone(), vec![]))).len(), 1);
-        assert!(store.apply(Derived::New(record(claim.clone(), vec![]))).is_empty());
+        assert_eq!(store.apply(Derived::New(record(claim.clone(), vec![])), 1).len(), 1);
+        assert!(store.apply(Derived::New(record(claim.clone(), vec![])), 2).is_empty());
 
         let rows = vec![OfferRowClaim {
             collateral: asset(LBTC),
@@ -1838,8 +1914,8 @@ mod tests {
             amount: 25_000_00000000,
         };
         // Two posts with the same terms are two records.
-        let k1 = store.apply(Derived::New(record(offer.clone(), vec![coin(0xa1)])));
-        let k2 = store.apply(Derived::New(record(offer.clone(), vec![coin(0xa2)])));
+        let k1 = store.apply(Derived::New(record(offer.clone(), vec![coin(0xa1)])), 3);
+        let k2 = store.apply(Derived::New(record(offer.clone(), vec![coin(0xa2)])), 4);
         assert_eq!(k1.len(), 1);
         assert_eq!(k2.len(), 1);
         assert_ne!(k1, k2);
@@ -1854,7 +1930,7 @@ mod tests {
             coins: Some(vec![]),
             coins_removed: vec![coin(0xa2).outpoint],
             status: Some(ContractStatus::Closed { path: "cancel".to_owned() }),
-        });
+        }, 5);
         assert_eq!(changed, k2);
         assert_eq!(store.get(&k1[0]).unwrap().status, ContractStatus::Active);
         assert_eq!(store.get(&k2[0]).unwrap().status, ContractStatus::Closed { path: "cancel".to_owned() });
@@ -1869,7 +1945,7 @@ mod tests {
             coins: None,
             coins_removed: vec![coin(0xc1).outpoint],
             status: None,
-        });
+        }, 6);
         assert_eq!(changed, vec![claim_key.clone()]);
         assert_eq!(store.get(&claim_key).unwrap().coins, vec![coin(0xc2)]);
     }
