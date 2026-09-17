@@ -1102,7 +1102,7 @@ mod tests {
     fn a_hosts_features_travel_with_every_login() {
         let mut core = core().with_features(vec!["contracts/1".to_owned()]);
         for _ in 0..2 {
-            core.handle(Input::Transport {
+            let _ = core.handle(Input::Transport {
                 event: TransportEvent::Connected,
             });
             let effects = core.handle(Input::Transport {
@@ -1113,7 +1113,7 @@ mod tests {
             let frames = sent_frames(&effects);
             assert_eq!(frames.len(), 1);
             assert!(frames[0].contains(r#""features":["contracts/1"]"#), "{}", frames[0]);
-            core.handle(Input::Transport {
+            let _ = core.handle(Input::Transport {
                 event: TransportEvent::Disconnected,
             });
         }
