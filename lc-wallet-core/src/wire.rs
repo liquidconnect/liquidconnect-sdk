@@ -346,6 +346,16 @@ pub struct LoginReq {
     /// Unique id of the app installation. Optional only because the
     /// first shipped app version predates it; always set it.
     pub install_id: Option<InstallId>,
+    /// What this install can do beyond the base protocol, as
+    /// `name/version` strings (sideswap_rust docs/connect.md, "Features").
+    /// Additive fields are invisible to an old wallet, so a relying party
+    /// must be able to tell whether a new kind of request will be honoured
+    /// before it sends one; the connect server copies the list of the
+    /// install that linked a session into the relying party's view of it.
+    /// Defaulted and omitted when empty: the frame a wallet without
+    /// features sends is byte for byte the one it sent before the list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -748,6 +758,31 @@ mod tests {
             }
             other => panic!("wrong parse: {other:?}"),
         }
+    }
+
+    /// The features list: a login without one is the frame it always was
+    /// (so an old connect server sees nothing new), a login with one names
+    /// them, and a server that predates the list ignores the field — it is
+    /// the pinned fixture of `sideswap_rust`'s `connect_api::LoginReq`.
+    #[test]
+    fn login_req_features_wire_shapes() {
+        let key = crate::key::WalletKey::new(&[7u8; 32], crate::key::Network::LiquidTestnet);
+        let login = |features: Vec<String>| LoginReq {
+            public_key: key.public_key(),
+            signature: key.sign_challenge("abc"),
+            install_id: None,
+            features,
+        };
+        let bare = serde_json::to_value(login(vec![])).unwrap();
+        assert!(bare.get("features").is_none(), "{bare}");
+        assert_eq!(bare.as_object().unwrap().len(), 3);
+        let named = serde_json::to_value(login(vec!["contracts/1".to_owned()])).unwrap();
+        assert_eq!(named["features"], serde_json::json!(["contracts/1"]));
+        // What an install built before the list sends still parses, as none.
+        let old: LoginReq = serde_json::from_value(bare).unwrap();
+        assert!(old.features.is_empty());
+        let back: LoginReq = serde_json::from_value(named).unwrap();
+        assert_eq!(back.features, vec!["contracts/1".to_owned()]);
     }
 
     /// A pre-message LoginResp (no sign_message_requests field) still parses.

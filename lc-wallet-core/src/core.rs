@@ -208,6 +208,10 @@ pub struct WalletConnectCore {
     mobile_requests: BTreeSet<String>,
 
     fcm_token: Option<String>,
+
+    /// What this host can do beyond the base protocol, stated at login
+    /// (`wire::LoginReq::features`). Empty until the host says otherwise.
+    features: Vec<String>,
 }
 
 fn send(id: wire::ReqId, req: wire::Req) -> Effect {
@@ -239,7 +243,18 @@ impl WalletConnectCore {
             next_action_id: 1,
             mobile_requests: BTreeSet::new(),
             fcm_token: None,
+            features: Vec::new(),
         }
+    }
+
+    /// State the features this host supports, as `name/version` strings;
+    /// they go out with every login from here on. A host names a feature
+    /// only once it handles every request and notification that belongs to
+    /// it: the connect server will send them, and a relying party will rely
+    /// on them, on the strength of this list.
+    pub fn with_features(mut self, features: Vec<String>) -> Self {
+        self.features = features;
+        self
     }
 
     pub fn is_logged_in(&self) -> bool {
@@ -470,6 +485,7 @@ impl WalletConnectCore {
                         public_key: self.wallet_key.public_key(),
                         signature: self.wallet_key.sign_challenge(&resp.challenge),
                         install_id: Some(self.install_id),
+                        features: self.features.clone(),
                     }),
                 ));
             }
@@ -1076,6 +1092,31 @@ mod tests {
         assert!(frames[0].contains("\"Login\""));
         assert!(frames[0].contains("public_key"));
         assert!(frames[0].contains("install_id"));
+        // A host that states no features sends the frame it always sent.
+        assert!(!frames[0].contains("features"));
+    }
+
+    /// The features a host states go out with the login, and with every
+    /// login after a reconnect.
+    #[test]
+    fn a_hosts_features_travel_with_every_login() {
+        let mut core = core().with_features(vec!["contracts/1".to_owned()]);
+        for _ in 0..2 {
+            core.handle(Input::Transport {
+                event: TransportEvent::Connected,
+            });
+            let effects = core.handle(Input::Transport {
+                event: TransportEvent::Recv {
+                    text: r#"{"Resp":{"id":0,"resp":{"Challenge":{"challenge":"n1"}}}}"#.to_owned(),
+                },
+            });
+            let frames = sent_frames(&effects);
+            assert_eq!(frames.len(), 1);
+            assert!(frames[0].contains(r#""features":["contracts/1"]"#), "{}", frames[0]);
+            core.handle(Input::Transport {
+                event: TransportEvent::Disconnected,
+            });
+        }
     }
 
     /// An approval taken while offline is queued, not lost, and replays
