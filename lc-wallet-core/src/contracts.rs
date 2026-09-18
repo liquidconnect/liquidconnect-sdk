@@ -46,6 +46,7 @@ use elements::{AssetId, OutPoint, Script, Txid};
 
 use crate::approval::{OwnedInput, decode_pset};
 use crate::bs_channel::{self, ChannelTerms};
+use crate::rf_account::{self, AccountTerms};
 use crate::key::Network;
 use crate::lending::{
     FILL_BORROWER_NFT_OUTPUT, FILL_LENDER_NFT_OUTPUT, FILL_POSITION_OUTPUT, OfferRowClaim, SWAPTION_CLAIM_LEAF,
@@ -67,6 +68,8 @@ pub mod kind {
     pub const LEND_CLAIM_V1: &str = "sw/lend/claim/v1";
     /// A BetSimply house channel under the v5 program set (`bs_channel`).
     pub const BS_CHANNEL_V5: &str = "bs/channel/v5";
+    /// A Rolling Future margin account: a leaf of the venue's pool (`rf_account`).
+    pub const RF_ACCOUNT_V1: &str = "sw/rf/account/v1";
 }
 
 /// A position's terms: exactly the covenant's witness terms in digest
@@ -143,6 +146,9 @@ pub enum ContractParams {
     /// `bs/channel/v5`: a BetSimply house channel; the person is its owner.
     #[serde(rename = "bs/channel/v5")]
     BsChannelV5(ChannelTerms),
+    /// `sw/rf/account/v1`: a Rolling Future account; the person is its owner.
+    #[serde(rename = "sw/rf/account/v1")]
+    RfAccountV1(AccountTerms),
 }
 
 impl ContractParams {
@@ -153,6 +159,7 @@ impl ContractParams {
             ContractParams::LendOfferV1 { .. } => kind::LEND_OFFER_V1,
             ContractParams::LendClaimV1 { .. } => kind::LEND_CLAIM_V1,
             ContractParams::BsChannelV5(_) => kind::BS_CHANNEL_V5,
+            ContractParams::RfAccountV1(_) => kind::RF_ACCOUNT_V1,
         }
     }
 
@@ -162,6 +169,7 @@ impl ContractParams {
     pub fn leaf(&self) -> [u8; 32] {
         match self {
             ContractParams::BsChannelV5(t) => t.program_root,
+            ContractParams::RfAccountV1(t) => t.program_root,
             ContractParams::LendPositionV5(_) => SWAPTION_LENDING_V5_LEAF,
             ContractParams::LendPositionV4(_) => SWAPTION_LENDING_V4_LEAF,
             ContractParams::LendOfferV1 { .. } => SWAPTION_OFFER_LEAF,
@@ -245,6 +253,12 @@ impl ContractParams {
                 m.insert("t_chal", h(t.t_chal));
                 m.insert("t_reveal", h(t.t_reveal));
             }
+            ContractParams::RfAccountV1(t) => {
+                m.insert("asset", a(&t.asset));
+                m.insert("index", h(t.index));
+                m.insert("owner_pk", x(&t.owner_pk));
+                m.insert("program_root", x(&t.program_root));
+            }
         }
         serde_json::to_string(&m).expect("a map serialises")
     }
@@ -321,6 +335,11 @@ impl ContractParams {
                 let state = bs_channel::ChannelState::from_bytes(bytes).ok_or_else(|| anyhow::anyhow!("a channel state is {} bytes", bs_channel::STATE_LEN))?;
                 Ok(bs_channel::channel_script(t, &state))
             }
+            ContractParams::RfAccountV1(t) => {
+                let bytes = state.and_then(ContractState::bytes).ok_or_else(|| anyhow::anyhow!("an account needs its state"))?;
+                let state = rf_account::AccountState::from_bytes(bytes).ok_or_else(|| anyhow::anyhow!("not an account state"))?;
+                rf_account::account_script(t, &state).ok_or_else(|| anyhow::anyhow!("the leaf is not this account's, or not in the tree the root commits to"))
+            }
         }
     }
 
@@ -337,6 +356,7 @@ impl ContractParams {
         match self {
             ContractParams::LendClaimV1 { .. } => None,
             ContractParams::BsChannelV5(_) => bs_channel::ChannelState::from_hex(text).map(|s| ContractState::Bytes(s.to_bytes().to_vec())),
+            ContractParams::RfAccountV1(_) => rf_account::AccountState::from_hex(text).map(|s| ContractState::Bytes(s.to_bytes())),
             _ => parse_u64(text).map(ContractState::Amount),
         }
     }
@@ -349,6 +369,7 @@ impl ContractParams {
     pub fn leaf_is_pinned(&self) -> bool {
         match self {
             ContractParams::BsChannelV5(t) => bs_channel::pinned(t).is_some(),
+            ContractParams::RfAccountV1(t) => rf_account::pinned(t).is_some(),
             _ => true,
         }
     }
@@ -364,6 +385,8 @@ impl ContractParams {
             ContractParams::LendClaimV1 { .. } => None,
             // Relative, not a height: T_CHAL blocks after the house's last move.
             ContractParams::BsChannelV5(_) => None,
+            // Epoch end is a session, not a height; the exit is the venue's rules.
+            ContractParams::RfAccountV1(_) => None,
         }
     }
 
@@ -374,6 +397,7 @@ impl ContractParams {
             ContractParams::LendOfferV1 { lender_token, .. } => Some(*lender_token),
             ContractParams::LendClaimV1 { lender_token } => Some(*lender_token),
             ContractParams::BsChannelV5(_) => None,
+            ContractParams::RfAccountV1(_) => None,
         }
     }
 }
@@ -435,6 +459,11 @@ impl ContractState {
     /// A channel's state, if this is one.
     pub fn channel(&self) -> Option<bs_channel::ChannelState> {
         self.bytes().and_then(bs_channel::ChannelState::from_bytes)
+    }
+
+    /// A Rolling Future account's state, if this is one.
+    pub fn account(&self) -> Option<rf_account::AccountState> {
+        self.bytes().and_then(rf_account::AccountState::from_bytes)
     }
 }
 
@@ -2017,6 +2046,17 @@ impl ContractRecord {
                     fmt8(balance),
                     if t.t_chal == 1 { "" } else { "s" },
                     t_chal = t.t_chal
+                )
+            }
+            (ContractParams::RfAccountV1(t), _) => {
+                // `cash_symbol` is the pool's asset, `collateral_symbol` the contract's unit.
+                let venue = rf_account::pinned(t).map(|pin| pin.venue).unwrap_or("Venue");
+                let account = self.state.as_ref().and_then(ContractState::account);
+                let (cash, position, session) = account.as_ref().map(|s| (s.leaf.cash, s.leaf.position(), s.session)).unwrap_or((0, 0, 0));
+                let position_text = if position < 0 { format!("-{}", fmt8(position.unsigned_abs())) } else { fmt8(position as u64) };
+                format!(
+                    "{venue} account · {} {cash_symbol} cash · position {position_text} {collateral_symbol} · session {session} · shown from the chain; the exit is the venue's rules",
+                    fmt8(cash)
                 )
             }
         }

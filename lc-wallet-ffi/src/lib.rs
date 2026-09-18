@@ -735,7 +735,9 @@ pub struct WalletFacts {
     /// wallet holds exactly one unit of it.
     pub balances: Vec<AssetAmount>,
     /// The wallet's own x-only public keys a contract may name as its
-    /// owner, hex-encoded (64 chars): its Liquid Connect identity key.
+    /// owner, hex-encoded (64 chars): its Liquid Connect identity key (a
+    /// house channel's owner) and its venue key (a Rolling Future account's
+    /// owner, `m/19523'/<network>'/0'`).
     pub identity_keys: Vec<String>,
 }
 

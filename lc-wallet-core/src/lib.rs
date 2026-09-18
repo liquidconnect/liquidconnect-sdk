@@ -47,6 +47,7 @@ pub mod key;
 pub mod lending;
 pub mod link;
 pub mod payjoin;
+pub mod rf_account;
 pub mod short_id;
 pub mod venue;
 #[cfg(feature = "transport")]

@@ -20,10 +20,11 @@
 
 use std::str::FromStr;
 
-use elements::{AssetId, OutPoint, Txid};
+use elements::{AssetId, OutPoint, Script, Txid};
 use serde::{Deserialize, Serialize};
 
 use crate::bs_channel::ChannelTerms;
+use crate::rf_account::AccountTerms;
 use crate::contracts::{
     ContractCoin, ContractEvent, ContractParams, ContractRecord, ContractState, ContractStatus, ContractStore, PositionTerms, Role, explicit_txout, kind, parse_u64,
     script_hash,
@@ -38,6 +39,9 @@ pub const MAX_KIND_LEN: usize = 64;
 pub const MAX_LABEL_LEN: usize = 64;
 pub const MAX_COINS: usize = 64;
 pub const MAX_STATEMENT_ENTRIES: usize = 4_096;
+/// Intermediate coins a description may name between the coin the wallet
+/// holds and the coin it describes (a pool that advanced several times).
+pub const MAX_HOPS: usize = 64;
 
 /// One contract as a relying party describes it. `params` is the kind's
 /// canonical object: keys as in [`ContractParams::canonical_json`], u64 as
@@ -64,6 +68,23 @@ pub struct ContractSpec {
     /// The site's words for it. Display only, never used for any number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// For an UPDATE of a held contract whose coin moved more than once
+    /// since the wallet last saw it: the intermediate coins, oldest first,
+    /// each spent by the next and the last by the transaction that carries
+    /// `coins`. The wallet walks them on the chain; a hop it cannot confirm
+    /// is `coin_mismatch`. Empty for a direct move. At most [`MAX_HOPS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hops: Vec<SpecHop>,
+}
+
+/// One intermediate coin of a move: where it sat, and the script it paid
+/// (so a backend indexed by script can find it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpecHop {
+    pub txid: String,
+    pub vout: u32,
+    /// The scriptPubKey, hex.
+    pub script: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,6 +332,15 @@ pub fn params_from_spec(kind_name: &str, params: &Params) -> Result<ContractPara
                 lender_token: asset(params, "lender_token")?,
             })
         }
+        kind::RF_ACCOUNT_V1 => {
+            exact_keys(params, 4)?;
+            Ok(ContractParams::RfAccountV1(AccountTerms {
+                asset: asset(params, "asset")?,
+                program_root: hash32(params, "program_root")?,
+                owner_pk: hash32(params, "owner_pk")?,
+                index: height(params, "index")?,
+            }))
+        }
         kind::BS_CHANNEL_V5 => {
             exact_keys(params, 9)?;
             Ok(ContractParams::BsChannelV5(ChannelTerms {
@@ -355,6 +385,7 @@ pub fn spec_of(record: &ContractRecord) -> ContractSpec {
             })
             .collect(),
         label: None,
+        hops: Vec::new(),
     }
 }
 
@@ -390,6 +421,9 @@ fn role_is_bound(params: &ContractParams, role: Role, wallet: &dyn WalletView) -
         // The owner of a house channel is the wallet whose identity key the
         // state commits to: the key `settle` pays the player's share by.
         (ContractParams::BsChannelV5(t), Role::Owner) => wallet.owns_key(&t.owner_pk),
+        // The owner of a venue account is the wallet whose venue key the leaf
+        // names: the key withdrawals and exits pay.
+        (ContractParams::RfAccountV1(t), Role::Owner) => wallet.owns_key(&t.owner_pk),
         _ => false,
     }
 }
@@ -436,6 +470,29 @@ fn spender(record: &ContractRecord, chain: &dyn ChainView) -> Result<Option<Txid
         .and_then(|output| output.spent_by))
 }
 
+/// What spent the coin a held record sits at, followed through `hops`
+/// when the relying party names the intermediate coins: each hop must be
+/// the spender of the one before and sit at the script it names, and the
+/// answer is what spent the last. A hop the chain does not confirm ends the
+/// walk with `None`, which the caller refuses as `coin_mismatch`. No hops:
+/// the direct spender.
+fn moved_along(held: &ContractRecord, hops: &[SpecHop], chain: &dyn ChainView) -> Result<Option<Txid>, Reject> {
+    let mut by = spender(held, chain)?;
+    for hop in hops {
+        let txid = Txid::from_str(&hop.txid).map_err(|_| Reject::CoinMismatch)?;
+        if by != Some(txid) {
+            return Ok(None);
+        }
+        let script = Script::from(hex::decode(&hop.script).map_err(|_| Reject::CoinMismatch)?);
+        by = chain
+            .output(&OutPoint::new(txid, hop.vout), &script)
+            .map_err(|ChainUnavailable| Reject::ChainUnavailable)?
+            .filter(|output| output.txout.script_pubkey == script)
+            .and_then(|output| output.spent_by);
+    }
+    Ok(by)
+}
+
 /// The store key of the record a spec speaks of, if the store holds it. A
 /// position and a claim key by their id. Offers with the same terms share
 /// an id and key by their post coin: the one meant is the one whose coin
@@ -471,7 +528,7 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
     if spec.kind.len() > MAX_KIND_LEN {
         return Err(Reject::UnknownKind);
     }
-    if spec.coins.len() > MAX_COINS {
+    if spec.coins.len() > MAX_COINS || spec.hops.len() > MAX_HOPS {
         return Err(Reject::TooMany);
     }
     let params = params_from_spec(&spec.kind, &spec.params)?;
@@ -511,6 +568,7 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
         ContractParams::LendOfferV1 { cash, .. } => Some(*cash),
         ContractParams::LendClaimV1 { .. } => None,
         ContractParams::BsChannelV5(t) => Some(t.asset),
+        ContractParams::RfAccountV1(t) => Some(t.asset),
     };
     let mut all_confirmed = true;
     for coin in &coins {
@@ -587,7 +645,7 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
     } else {
         // A state can only move along the chain: what carries the new
         // coin, or ended the contract, spent the coin the record had.
-        let moved_by = spender(&held, chain)?;
+        let moved_by = moved_along(&held, &spec.hops, chain)?;
         match (coins.first(), moved_by) {
             (Some(new), Some(by)) if by == new.outpoint.txid => {
                 record.history.push(ContractEvent {
@@ -1148,6 +1206,7 @@ mod tests {
             state: None,
             coins: vec![SpecCoin { txid: txid(0x61).to_string(), vout: 1, asset: USDT.to_owned(), amount: "45685276800".to_owned() }],
             label: None,
+            hops: Vec::new(),
         };
 
         // The live store holds the position already.
@@ -1231,6 +1290,7 @@ mod tests {
                 amount: vectors::SEQ104_AMOUNT.to_string(),
             }],
             label: Some("BetSimply account".to_owned()),
+            hops: Vec::new(),
         };
         assert_eq!(spec.params.len(), 9);
         assert_eq!(spec.params["t_chal"], serde_json::json!(3));
@@ -1332,5 +1392,113 @@ mod tests {
         assert_eq!(serde_json::from_str::<ContractStore>(&json).unwrap(), store);
         let old = r#"{"txid":"be8563700e00cf6907cd1901a0a65c05c18dd55bbc69f5f8d1ad9f999c69b423","path":"fill","state_after":46117756200}"#;
         assert_eq!(serde_json::from_str::<ContractEvent>(old).unwrap().state_after, Some(ContractState::Amount(46117756200)));
+    }
+
+    /// A Rolling Future account (`sw/rf/account/v1`) registers for the wallet
+    /// whose venue key owns its leaf, at the live pool's coin, under the
+    /// pinned program root; and when the pool advanced more than once since
+    /// the wallet last saw it, the description names the hops and the wallet
+    /// walks them on the chain.
+    #[test]
+    fn a_venue_account_registers_for_its_owner_and_moves_along_named_hops() {
+        use crate::rf_account::{self, vectors};
+        let chain = Chain::default();
+        let (terms, state) = vectors::account_1();
+        let params = ContractParams::RfAccountV1(terms.clone());
+        let key = hex::encode(params.contract_id());
+        let (leaves, _, (pool_txid, pool_vout, pool_amount)) = vectors::anchor();
+        let pool_script = rf_account::account_script(&terms, &state).unwrap();
+        assert_eq!(hex::encode(pool_script.as_bytes()), vectors::POOL_SCRIPT);
+        chain.put(pool_txid, pool_vout, vectors::USDT_TESTNET, pool_amount, pool_script.clone());
+        let spec = ContractSpec {
+            contract_id: key.clone(),
+            kind: kind::RF_ACCOUNT_V1.to_owned(),
+            leaf: hex::encode(terms.program_root),
+            params: serde_json::from_str(&params.canonical_json()).unwrap(),
+            role: "owner".to_owned(),
+            state: Some(state.to_hex()),
+            coins: vec![SpecCoin { txid: pool_txid.to_string(), vout: pool_vout, asset: vectors::USDT_TESTNET.to_owned(), amount: pool_amount.to_string() }],
+            label: Some("Rolling Future account 1".to_owned()),
+            hops: Vec::new(),
+        };
+        assert_eq!(spec.params.len(), 4);
+        assert_eq!(spec.params["index"], serde_json::json!(1));
+        assert_eq!(params_from_spec(&spec.kind, &spec.params).unwrap(), params);
+        let owner = Wallet { keys: BTreeSet::from([terms.owner_pk]), ..Wallet::default() };
+        let domain = "paper.swaption.io";
+        let mut store = ContractStore::default();
+
+        let mut lie = spec.clone();
+        let mut lie_terms = terms.clone();
+        lie_terms.program_root[0] ^= 1;
+        let lie_params = ContractParams::RfAccountV1(lie_terms);
+        lie.leaf = hex::encode(lie_params.leaf());
+        lie.params = serde_json::from_str(&lie_params.canonical_json()).unwrap();
+        lie.contract_id = hex::encode(lie_params.contract_id());
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::LeafMismatch.into(), "not a pinned venue");
+        let mut lie = spec.clone();
+        let mut other = state.clone();
+        other.leaf = leaves[2].clone();
+        other.path = rf_account::proof(&leaves, 2).unwrap();
+        lie.state = Some(other.to_hex());
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::ScriptMismatch.into(), "another account's leaf");
+        let mut lie = spec.clone();
+        let mut behind = state.clone();
+        behind.session -= 1;
+        lie.state = Some(behind.to_hex());
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::ScriptMismatch.into(), "a state the coin is not at");
+        assert_eq!(register(&mut store, &spec, domain, 1, &Wallet::default(), &chain).outcome, Reject::RoleNotBound.into());
+        let stranger = Wallet { keys: BTreeSet::from([leaves[2].owner_pk]), ..Wallet::default() };
+        assert_eq!(register(&mut store, &spec, domain, 1, &stranger, &chain).outcome, Reject::RoleNotBound.into(), "another account's owner");
+        assert!(store.records().next().is_none());
+
+        assert_eq!(register(&mut store, &spec, domain, 1_000, &owner, &chain).outcome, ContractOutcome::Registered);
+        let record = store.get(&key).unwrap().clone();
+        assert_eq!(record.role, Role::Owner);
+        assert_eq!(record.coins[0].amount, pool_amount);
+        assert!(record.render_terms("BTC", "USDt").starts_with("Rolling Future account · 2583.19132055 USDt cash · position 0 BTC · session 349"), "{}", record.render_terms("BTC", "USDt"));
+        let mut described = spec_of(&record);
+        described.label = spec.label.clone();
+        assert_eq!(described, spec);
+        assert_eq!(register(&mut store, &spec, domain, 1_000, &owner, &chain).outcome, ContractOutcome::Unchanged);
+
+        // Two advances since: pool → A → B. The description names A as a
+        // hop; without it the wallet cannot see the lineage.
+        let mut mid = state.clone();
+        mid.session += 1;
+        let mid_script = rf_account::account_script(&terms, &mid).unwrap();
+        let mut next = state.clone();
+        next.session += 2;
+        let next_script = rf_account::account_script(&terms, &next).unwrap();
+        chain.put(txid(0xa1), 0, vectors::USDT_TESTNET, pool_amount, mid_script.clone());
+        chain.put(txid(0xa2), 0, vectors::USDT_TESTNET, pool_amount, next_script);
+        chain.spend(pool_txid, pool_vout, txid(0xa1));
+        chain.spend(txid(0xa1), 0, txid(0xa2));
+        let mut moved = spec.clone();
+        moved.state = Some(next.to_hex());
+        moved.coins = vec![SpecCoin { txid: txid(0xa2).to_string(), vout: 0, asset: vectors::USDT_TESTNET.to_owned(), amount: pool_amount.to_string() }];
+        assert_eq!(register(&mut store, &moved, domain, 2_000, &owner, &chain).outcome, Reject::CoinMismatch.into(), "no hops: A is not B");
+        let hop = SpecHop { txid: txid(0xa1).to_string(), vout: 0, script: hex::encode(mid_script.as_bytes()) };
+        let mut wrong = moved.clone();
+        wrong.hops = vec![SpecHop { txid: txid(0xa9).to_string(), ..hop.clone() }];
+        assert_eq!(register(&mut store, &wrong, domain, 2_000, &owner, &chain).outcome, Reject::CoinMismatch.into(), "a hop that did not spend the coin");
+        let mut wrong = moved.clone();
+        wrong.hops = vec![SpecHop { script: hex::encode(next_script_of(&chain, txid(0xa2))), ..hop.clone() }];
+        assert_eq!(register(&mut store, &wrong, domain, 2_000, &owner, &chain).outcome, Reject::CoinMismatch.into(), "a hop at a script the coin does not pay");
+        assert_eq!(register(&mut store, &wrong, domain, 2_000, &owner, &ByScript(&chain)).outcome, Reject::CoinMismatch.into());
+        moved.hops = vec![hop];
+        assert_eq!(register(&mut store, &moved, domain, 2_000, &owner, &ByScript(&chain)).outcome, ContractOutcome::Updated);
+        let record = store.get(&key).unwrap();
+        assert_eq!(record.coins[0].outpoint, OutPoint::new(txid(0xa2), 0));
+        assert_eq!(record.state.as_ref().and_then(ContractState::account).map(|s| s.session), Some(351));
+        assert_eq!(statement(&store, domain)[0].kind, kind::RF_ACCOUNT_V1);
+        // Too many hops is refused at the door.
+        let mut many = moved.clone();
+        many.hops = vec![many.hops[0].clone(); MAX_HOPS + 1];
+        assert_eq!(register(&mut store, &many, domain, 3_000, &owner, &chain).outcome, Reject::TooMany.into());
+    }
+
+    fn next_script_of(chain: &Chain, txid: Txid) -> Vec<u8> {
+        chain.outputs.borrow()[&(txid, 0)].txout.script_pubkey.as_bytes().to_vec()
     }
 }

@@ -992,7 +992,12 @@ mod tests {
     /// `connect_api` carries the same shapes; never change one side alone.
     #[test]
     fn register_contracts_wire_shapes() {
-        use crate::contract_registration::{ContractEntry, ContractOutcome, ContractResult, EntryStatus};
+        use crate::contract_registration::{ContractEntry, ContractOutcome, ContractResult, EntryStatus, SpecHop};
+
+        // A hop travels as its outpoint and script, and only when named (the
+        // core's `connect_api` pins the same string).
+        let hop = SpecHop { txid: "a1".repeat(32), vout: 0, script: format!("5120{}", "cd".repeat(32)) };
+        assert_eq!(serde_json::to_string(&hop).unwrap(), format!(r#"{{"txid":"{}","vout":0,"script":"5120{}"}}"#, "a1".repeat(32), "cd".repeat(32)));
 
         // Server -> wallet: a relying party's description, to be verified.
         let from: From = serde_json::from_str(
