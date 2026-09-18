@@ -2499,7 +2499,7 @@ public struct ContractRecordInfo {
      */
     public var kind: String
     /**
-     * "borrower" or "lender".
+     * "borrower", "lender" or "owner".
      */
     public var role: String
     /**
@@ -2507,8 +2507,9 @@ public struct ContractRecordInfo {
      */
     public var domain: String
     /**
-     * The mutable slot as a decimal string, where the kind has one: a
-     * position's remaining debt, the cash an offer still holds.
+     * The mutable slot in the kind's wire form, where the kind has one: a
+     * position's remaining debt or the cash an offer still holds as a
+     * decimal string; a house channel's 52 state bytes as hex.
      */
     public var state: String?
     public var status: ContractStatusInfo
@@ -2540,14 +2541,15 @@ public struct ContractRecordInfo {
          * "sw/lend/position/v5", "sw/lend/offer/v1", "sw/lend/claim/v1", …
          */kind: String, 
         /**
-         * "borrower" or "lender".
+         * "borrower", "lender" or "owner".
          */role: String, 
         /**
          * The site that registered it, as the connect server names it.
          */domain: String, 
         /**
-         * The mutable slot as a decimal string, where the kind has one: a
-         * position's remaining debt, the cash an offer still holds.
+         * The mutable slot in the kind's wire form, where the kind has one: a
+         * position's remaining debt or the cash an offer still holds as a
+         * decimal string; a house channel's 52 state bytes as hex.
          */state: String?, status: ContractStatusInfo, 
         /**
          * Where the contract's money sits.
@@ -4519,6 +4521,11 @@ public struct WalletFacts {
      * wallet holds exactly one unit of it.
      */
     public var balances: [AssetAmount]
+    /**
+     * The wallet's own x-only public keys a contract may name as its
+     * owner, hex-encoded (64 chars): its Liquid Connect identity key.
+     */
+    public var identityKeys: [String]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4532,9 +4539,14 @@ public struct WalletFacts {
          * What the wallet holds, per coin or per asset (amounts of one asset
          * are added up). A position token or a lender token is held when the
          * wallet holds exactly one unit of it.
-         */balances: [AssetAmount]) {
+         */balances: [AssetAmount], 
+        /**
+         * The wallet's own x-only public keys a contract may name as its
+         * owner, hex-encoded (64 chars): its Liquid Connect identity key.
+         */identityKeys: [String]) {
         self.scripts = scripts
         self.balances = balances
+        self.identityKeys = identityKeys
     }
 }
 
@@ -4551,12 +4563,16 @@ extension WalletFacts: Equatable, Hashable {
         if lhs.balances != rhs.balances {
             return false
         }
+        if lhs.identityKeys != rhs.identityKeys {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(scripts)
         hasher.combine(balances)
+        hasher.combine(identityKeys)
     }
 }
 
@@ -4570,13 +4586,15 @@ public struct FfiConverterTypeWalletFacts: FfiConverterRustBuffer {
         return
             try WalletFacts(
                 scripts: FfiConverterSequenceString.read(from: &buf), 
-                balances: FfiConverterSequenceTypeAssetAmount.read(from: &buf)
+                balances: FfiConverterSequenceTypeAssetAmount.read(from: &buf), 
+                identityKeys: FfiConverterSequenceString.read(from: &buf)
         )
     }
 
     public static func write(_ value: WalletFacts, into buf: inout [UInt8]) {
         FfiConverterSequenceString.write(value.scripts, into: &buf)
         FfiConverterSequenceTypeAssetAmount.write(value.balances, into: &buf)
+        FfiConverterSequenceString.write(value.identityKeys, into: &buf)
     }
 }
 

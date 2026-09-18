@@ -3999,7 +3999,7 @@ data class ContractRecordInfo (
      */
     var `kind`: kotlin.String, 
     /**
-     * "borrower" or "lender".
+     * "borrower", "lender" or "owner".
      */
     var `role`: kotlin.String, 
     /**
@@ -4007,8 +4007,9 @@ data class ContractRecordInfo (
      */
     var `domain`: kotlin.String, 
     /**
-     * The mutable slot as a decimal string, where the kind has one: a
-     * position's remaining debt, the cash an offer still holds.
+     * The mutable slot in the kind's wire form, where the kind has one: a
+     * position's remaining debt or the cash an offer still holds as a
+     * decimal string; a house channel's 52 state bytes as hex.
      */
     var `state`: kotlin.String?, 
     var `status`: ContractStatusInfo, 
@@ -4955,7 +4956,12 @@ data class WalletFacts (
      * are added up). A position token or a lender token is held when the
      * wallet holds exactly one unit of it.
      */
-    var `balances`: List<AssetAmount>
+    var `balances`: List<AssetAmount>, 
+    /**
+     * The wallet's own x-only public keys a contract may name as its
+     * owner, hex-encoded (64 chars): its Liquid Connect identity key.
+     */
+    var `identityKeys`: List<kotlin.String>
 ) {
     
     companion object
@@ -4969,17 +4975,20 @@ public object FfiConverterTypeWalletFacts: FfiConverterRustBuffer<WalletFacts> {
         return WalletFacts(
             FfiConverterSequenceString.read(buf),
             FfiConverterSequenceTypeAssetAmount.read(buf),
+            FfiConverterSequenceString.read(buf),
         )
     }
 
     override fun allocationSize(value: WalletFacts) = (
             FfiConverterSequenceString.allocationSize(value.`scripts`) +
-            FfiConverterSequenceTypeAssetAmount.allocationSize(value.`balances`)
+            FfiConverterSequenceTypeAssetAmount.allocationSize(value.`balances`) +
+            FfiConverterSequenceString.allocationSize(value.`identityKeys`)
     )
 
     override fun write(value: WalletFacts, buf: ByteBuffer) {
             FfiConverterSequenceString.write(value.`scripts`, buf)
             FfiConverterSequenceTypeAssetAmount.write(value.`balances`, buf)
+            FfiConverterSequenceString.write(value.`identityKeys`, buf)
     }
 }
 

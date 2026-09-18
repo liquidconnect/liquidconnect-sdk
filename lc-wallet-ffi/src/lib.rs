@@ -16,7 +16,7 @@ use lc_wallet_core::contract_registration::{
     self, ChainUnavailable, ChainView, ContractEntry, ContractOutcome, ContractResult, WalletView,
 };
 use lc_wallet_core::contract_views::{FactsWalletView, HistoryChainView, HistoryTx, ScriptHistory};
-use lc_wallet_core::contracts::{ContractRecord, ContractStatus, ContractStore, Role};
+use lc_wallet_core::contracts::{ContractRecord, ContractState, ContractStatus, ContractStore};
 use lc_wallet_core::identity;
 use lc_wallet_core::key::WalletKey;
 use lc_wallet_core::transport;
@@ -734,6 +734,9 @@ pub struct WalletFacts {
     /// are added up). A position token or a lender token is held when the
     /// wallet holds exactly one unit of it.
     pub balances: Vec<AssetAmount>,
+    /// The wallet's own x-only public keys a contract may name as its
+    /// owner, hex-encoded (64 chars): its Liquid Connect identity key.
+    pub identity_keys: Vec<String>,
 }
 
 #[derive(uniffi::Record)]
@@ -764,7 +767,17 @@ impl WalletFacts {
                     .map_err(|e| LcError::Failure(format!("facts: asset {}: {e}", balance.asset_id)))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(FactsWalletView::new(scripts.iter(), balances))
+        let keys = self
+            .identity_keys
+            .iter()
+            .map(|key| {
+                hex::decode(key)
+                    .ok()
+                    .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                    .ok_or_else(|| LcError::Failure(format!("facts: identity key {key}: not 32 bytes of hex")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(FactsWalletView::new(scripts.iter(), balances, keys))
     }
 }
 
@@ -886,12 +899,13 @@ pub struct ContractRecordInfo {
     pub contract_id: String,
     /// "sw/lend/position/v5", "sw/lend/offer/v1", "sw/lend/claim/v1", …
     pub kind: String,
-    /// "borrower" or "lender".
+    /// "borrower", "lender" or "owner".
     pub role: String,
     /// The site that registered it, as the connect server names it.
     pub domain: String,
-    /// The mutable slot as a decimal string, where the kind has one: a
-    /// position's remaining debt, the cash an offer still holds.
+    /// The mutable slot in the kind's wire form, where the kind has one: a
+    /// position's remaining debt or the cash an offer still holds as a
+    /// decimal string; a house channel's 52 state bytes as hex.
     pub state: Option<String>,
     pub status: ContractStatusInfo,
     /// Where the contract's money sits.
@@ -933,13 +947,10 @@ impl ContractRecordInfo {
             key: key.to_owned(),
             contract_id: hex::encode(record.contract_id),
             kind: record.params.kind().to_owned(),
-            role: match record.role {
-                Role::Borrower => "borrower",
-                Role::Lender => "lender",
-            }
+            role: record.role.as_str()
             .to_owned(),
             domain: record.domain.clone(),
-            state: record.state.map(|state| state.to_string()),
+            state: record.state.as_ref().map(ContractState::wire),
             status: match &record.status {
                 ContractStatus::Pending => ContractStatusInfo::Pending,
                 ContractStatus::Active => ContractStatusInfo::Active,
@@ -1478,7 +1489,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use elements::hashes::{sha256, Hash};
-    use lc_wallet_core::contracts::{ContractCoin, ContractParams, PositionTerms};
+    use lc_wallet_core::contracts::{ContractCoin, ContractParams, PositionTerms, Role};
 
     use super::*;
 
@@ -1529,7 +1540,7 @@ mod tests {
             params,
             role: Role::Lender,
             domain: String::new(),
-            state: Some(456_85276800),
+            state: Some(ContractState::Amount(456_85276800)),
             coins: vec![ContractCoin {
                 outpoint: elements::OutPoint::new(fill_51().txid(), 0),
                 asset: asset(LBTC),
@@ -1604,6 +1615,7 @@ mod tests {
                     amount: 50_000,
                 },
             ],
+            identity_keys: Vec::new(),
         }
     }
 
@@ -1701,8 +1713,14 @@ mod tests {
         let garbled = WalletFacts {
             scripts: vec!["not hex".to_owned()],
             balances: Vec::new(),
+            identity_keys: Vec::new(),
         };
         assert!(garbled.view().is_err());
+        let short_key = WalletFacts {
+            identity_keys: vec!["abcd".to_owned()],
+            ..lender_facts()
+        };
+        assert!(short_key.view().is_err());
     }
 
     fn session(session_id: &str, domain: &str) -> wire::Session {
