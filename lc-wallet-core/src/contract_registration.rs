@@ -23,8 +23,10 @@ use std::str::FromStr;
 use elements::{AssetId, OutPoint, Txid};
 use serde::{Deserialize, Serialize};
 
+use crate::bs_channel::ChannelTerms;
 use crate::contracts::{
-    ContractCoin, ContractEvent, ContractParams, ContractRecord, ContractStatus, ContractStore, PositionTerms, Role, explicit_txout, kind, script_hash,
+    ContractCoin, ContractEvent, ContractParams, ContractRecord, ContractState, ContractStatus, ContractStore, PositionTerms, Role, explicit_txout, kind, parse_u64,
+    script_hash,
 };
 use crate::lending::{OfferRowClaim, SWAPTION_LENDING_V5_LEAF, claim_script};
 
@@ -50,9 +52,11 @@ pub struct ContractSpec {
     /// Hex tapleaf hash; must equal the wallet's pin for `kind`.
     pub leaf: String,
     pub params: serde_json::Map<String, serde_json::Value>,
-    /// "borrower" | "lender".
+    /// "borrower" | "lender" | "owner".
     pub role: String,
-    /// The mutable slot as a u64 string, where the kind has one.
+    /// The mutable slot in the kind's wire form, where the kind has one: the
+    /// canonical decimal of a u64 for the lending kinds, lower-case hex of
+    /// the 52 state bytes for a house channel ([`ContractParams::parse_state`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
     /// Where the contract's money sits now.
@@ -157,6 +161,9 @@ pub trait WalletView {
     fn owns_script_hash(&self, hash: &[u8; 32]) -> bool;
     /// The wallet holds exactly one unit of `asset`.
     fn holds_token(&self, asset: AssetId) -> bool;
+    /// `key` is one of this wallet's own x-only public keys: its Liquid
+    /// Connect identity key, which a house channel names as its owner.
+    fn owns_key(&self, key: &[u8; 32]) -> bool;
 }
 
 /// The chain backend cannot answer now; the relying party tries later.
@@ -200,13 +207,6 @@ fn field<'a>(params: &'a Params, key: &str) -> Result<&'a serde_json::Value, Rej
 
 fn text<'a>(params: &'a Params, key: &str) -> Result<&'a str, Reject> {
     field(params, key)?.as_str().ok_or(Reject::IdMismatch)
-}
-
-/// A u64 as the canonical decimal string: digits only, no sign, no leading
-/// zero but "0" itself.
-fn parse_u64(text: &str) -> Option<u64> {
-    let canonical = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) && (text == "0" || !text.starts_with('0'));
-    if canonical { text.parse().ok() } else { None }
 }
 
 fn amount(params: &Params, key: &str) -> Result<u64, Reject> {
@@ -311,6 +311,20 @@ pub fn params_from_spec(kind_name: &str, params: &Params) -> Result<ContractPara
                 lender_token: asset(params, "lender_token")?,
             })
         }
+        kind::BS_CHANNEL_V5 => {
+            exact_keys(params, 9)?;
+            Ok(ContractParams::BsChannelV5(ChannelTerms {
+                asset: asset(params, "asset")?,
+                channel_id: hash32(params, "channel_id")?,
+                house_pk: hash32(params, "house_pk")?,
+                house_sink: hash32(params, "house_sink")?,
+                owner_pk: hash32(params, "owner_pk")?,
+                bet_pk: hash32(params, "bet_pk")?,
+                program_root: hash32(params, "program_root")?,
+                t_chal: height(params, "t_chal")?,
+                t_reveal: height(params, "t_reveal")?,
+            }))
+        }
         _ => Err(Reject::UnknownKind),
     }
 }
@@ -328,11 +342,8 @@ pub fn spec_of(record: &ContractRecord) -> ContractSpec {
         kind: record.params.kind().to_owned(),
         leaf: hex::encode(record.params.leaf()),
         params,
-        role: match record.role {
-            Role::Borrower => "borrower".to_owned(),
-            Role::Lender => "lender".to_owned(),
-        },
-        state: record.state.map(|state| state.to_string()),
+        role: record.role.as_str().to_owned(),
+        state: record.state.as_ref().map(ContractState::wire),
         coins: record
             .coins
             .iter()
@@ -351,11 +362,7 @@ pub fn spec_of(record: &ContractRecord) -> ContractSpec {
 // Verification and storage (spec §5 rules 2–8).
 
 fn parse_role(role: &str) -> Option<Role> {
-    match role {
-        "borrower" => Some(Role::Borrower),
-        "lender" => Some(Role::Lender),
-        _ => None,
-    }
+    Role::parse(role)
 }
 
 /// Rule 5: the role is bound to this wallet by what the wallet holds.
@@ -380,6 +387,9 @@ fn role_is_bound(params: &ContractParams, role: Role, wallet: &dyn WalletView) -
             Role::Lender,
         ) => wallet.holds_token(*lender_token) && *claim == script_hash(&claim_script(*lender_token)) && *position_leaf == SWAPTION_LENDING_V5_LEAF,
         (ContractParams::LendClaimV1 { lender_token }, Role::Lender) => wallet.holds_token(*lender_token),
+        // The owner of a house channel is the wallet whose identity key the
+        // state commits to: the key `settle` pays the player's share by.
+        (ContractParams::BsChannelV5(t), Role::Owner) => wallet.owns_key(&t.owner_pk),
         _ => false,
     }
 }
@@ -417,7 +427,7 @@ fn spender(record: &ContractRecord, chain: &dyn ChainView) -> Result<Option<Txid
     let Some(coin) = record.coins.first() else {
         return Ok(None);
     };
-    let Ok(script) = record.params.script(record.state) else {
+    let Ok(script) = record.params.script_state(record.state.as_ref()) else {
         return Ok(None);
     };
     Ok(chain
@@ -468,23 +478,24 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
     if params.canonical_json().len() > MAX_PARAMS_LEN {
         return Err(Reject::IdMismatch);
     }
-    if spec.leaf != hex::encode(params.leaf()) {
+    if spec.leaf != hex::encode(params.leaf()) || !params.leaf_is_pinned() {
         return Err(Reject::LeafMismatch);
     }
     // Rule 3: the id is the wallet's to compute.
     if spec.contract_id != hex::encode(params.contract_id()) {
         return Err(Reject::IdMismatch);
     }
-    // Rule 4: the script these terms and this state make.
+    // Rule 4: the script these terms and this state make. The state is
+    // read in the kind's wire form, and a kind with a slot must have one.
     let state = match &spec.state {
-        Some(state) => Some(parse_u64(state).ok_or(Reject::ScriptMismatch)?),
+        Some(state) => Some(params.parse_state(state).ok_or(Reject::ScriptMismatch)?),
         None => None,
     };
-    let is_claim = matches!(params, ContractParams::LendClaimV1 { .. });
-    if is_claim == state.is_some() {
+    if params.has_state() != state.is_some() {
         return Err(Reject::ScriptMismatch);
     }
-    let script = params.script(state).map_err(|_| Reject::ScriptMismatch)?;
+    let is_claim = matches!(params, ContractParams::LendClaimV1 { .. });
+    let script = params.script_state(state.as_ref()).map_err(|_| Reject::ScriptMismatch)?;
     // Rule 5: the role is this wallet's by what it holds.
     let role = parse_role(&spec.role).ok_or(Reject::RoleNotBound)?;
     if !role_is_bound(&params, role, wallet) {
@@ -499,6 +510,7 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
         ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t) => Some(t.collateral),
         ContractParams::LendOfferV1 { cash, .. } => Some(*cash),
         ContractParams::LendClaimV1 { .. } => None,
+        ContractParams::BsChannelV5(t) => Some(t.asset),
     };
     let mut all_confirmed = true;
     for coin in &coins {
@@ -520,7 +532,7 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
             .map(|coin| ContractEvent {
                 txid: coin.outpoint.txid,
                 path: "registered".to_owned(),
-                state_after: state,
+                state_after: state.clone(),
             })
             .into_iter()
             .collect();
@@ -581,7 +593,7 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
                 record.history.push(ContractEvent {
                     txid: by,
                     path: "registered".to_owned(),
-                    state_after: state,
+                    state_after: state.clone(),
                 });
                 record.status = live;
             }
@@ -591,7 +603,7 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
                 record.history.push(ContractEvent {
                     txid: new.outpoint.txid,
                     path: "registered".to_owned(),
-                    state_after: state,
+                    state_after: state.clone(),
                 });
                 record.status = live;
             }
@@ -599,7 +611,7 @@ fn try_register(store: &mut ContractStore, spec: &ContractSpec, domain: &str, no
                 record.history.push(ContractEvent {
                     txid: by,
                     path: "unknown".to_owned(),
-                    state_after: state,
+                    state_after: state.clone(),
                 });
                 record.status = ContractStatus::Closed { path: "unknown".to_owned() };
             }
@@ -707,7 +719,7 @@ pub fn statement(store: &ContractStore, domain: &str) -> Vec<ContractEntry> {
         .map(|r| ContractEntry {
             contract_id: hex::encode(r.contract_id),
             kind: r.params.kind().to_owned(),
-            state: r.state.map(|state| state.to_string()),
+            state: r.state.as_ref().map(ContractState::wire),
             status: EntryStatus::from(&r.status),
         })
         .collect()
@@ -751,6 +763,7 @@ mod tests {
     struct Wallet {
         scripts: BTreeSet<[u8; 32]>,
         tokens: BTreeSet<AssetId>,
+        keys: BTreeSet<[u8; 32]>,
     }
     impl WalletView for Wallet {
         fn owns_script_hash(&self, hash: &[u8; 32]) -> bool {
@@ -758,6 +771,9 @@ mod tests {
         }
         fn holds_token(&self, asset: AssetId) -> bool {
             self.tokens.contains(&asset)
+        }
+        fn owns_key(&self, key: &[u8; 32]) -> bool {
+            self.keys.contains(key)
         }
     }
 
@@ -838,7 +854,7 @@ mod tests {
             params: params.clone(),
             role: Role::Lender,
             domain: String::new(),
-            state: Some(461_17756200),
+            state: Some(ContractState::Amount(461_17756200)),
             coins: vec![coin],
             status: ContractStatus::Active,
             hidden: false,
@@ -853,6 +869,7 @@ mod tests {
         Wallet {
             scripts: BTreeSet::new(),
             tokens: BTreeSet::from([asset_id(LENDER_TOKEN)]),
+            keys: BTreeSet::new(),
         }
     }
 
@@ -988,7 +1005,7 @@ mod tests {
         chain.spend(txid(0x52), 0, txid(0x53));
         assert_eq!(register(&mut store, &moved, "paper.swaption.io", 2_000, &lender(), &chain).outcome, ContractOutcome::Updated);
         let record = store.get(&key).unwrap();
-        assert_eq!(record.state, Some(half));
+        assert_eq!(record.state, Some(ContractState::Amount(half)));
         assert_eq!(record.coins[0].outpoint, OutPoint::new(txid(0x53), 1));
         assert_eq!(record.updated_at, 2_000);
         assert_eq!(record.history.len(), 2);
@@ -1102,7 +1119,7 @@ mod tests {
         assert_eq!(register(&mut store, &moved, "paper.swaption.io", 2_000, &lender(), &by_script).outcome, Reject::CoinMismatch.into());
         chain.spend(txid(0x52), 0, txid(0x53));
         assert_eq!(register(&mut store, &moved, "paper.swaption.io", 2_000, &lender(), &by_script).outcome, ContractOutcome::Updated);
-        assert_eq!(store.get(&key).unwrap().state, Some(half));
+        assert_eq!(store.get(&key).unwrap().state, Some(ContractState::Amount(half)));
         let mut over = moved.clone();
         over.coins.clear();
         chain.spend(txid(0x53), 1, txid(0x54));
@@ -1164,7 +1181,7 @@ mod tests {
         assert!(live.set_hidden(&position_key, true));
         assert_eq!(adopt_registered(&mut live, &before, &after), vec![claim_key.clone()]);
         assert!(live.get(&position_key).unwrap().hidden);
-        assert_eq!(live.get(&position_key).unwrap().state, Some(461_17756200));
+        assert_eq!(live.get(&position_key).unwrap().state, Some(ContractState::Amount(461_17756200)));
         assert_eq!(live.get(&claim_key), after.get(&claim_key));
         // Taking the same run in again changes nothing.
         assert!(adopt_registered(&mut live, &before, &after).is_empty());
@@ -1182,5 +1199,138 @@ mod tests {
         assert_eq!(register(&mut store, &spec, "paper.swaption.io", 1, &wallet, &chain).outcome, Reject::RoleNotBound.into(), "the right was sold: no token, no role");
         wallet.tokens.insert(asset_id(BORROWER_TOKEN));
         assert_eq!(register(&mut store, &spec, "paper.swaption.io", 1, &wallet, &chain).outcome, ContractOutcome::Registered);
+    }
+
+    /// A house channel (`bs/channel/v5`) registers for the wallet whose
+    /// identity key is its owner, under a pinned program root with that
+    /// root's house, at the coin its state makes — bs-test channel
+    /// `7a02f38b…` at seq 104, the state in its 104-hex wire form — and
+    /// its state moves only along the chain, as a position's does.
+    #[test]
+    fn a_house_channel_registers_for_its_owner_under_a_pinned_root() {
+        use crate::bs_channel::{self, vectors};
+        let chain = Chain::default();
+        let terms = vectors::bs_test_channel();
+        let params = ContractParams::BsChannelV5(terms.clone());
+        let key = hex::encode(params.contract_id());
+        let script104 = bs_channel::channel_script(&terms, &vectors::seq104());
+        assert_eq!(hex::encode(script104.as_bytes()), vectors::SEQ104_SCRIPT);
+        let txid104 = Txid::from_str(vectors::SEQ104_TXID).unwrap();
+        chain.put(txid104, 0, vectors::USDT_TESTNET, vectors::SEQ104_AMOUNT, script104);
+        let spec = ContractSpec {
+            contract_id: key.clone(),
+            kind: kind::BS_CHANNEL_V5.to_owned(),
+            leaf: hex::encode(terms.program_root),
+            params: serde_json::from_str(&params.canonical_json()).unwrap(),
+            role: "owner".to_owned(),
+            state: Some(vectors::seq104().to_hex()),
+            coins: vec![SpecCoin {
+                txid: vectors::SEQ104_TXID.to_owned(),
+                vout: 0,
+                asset: vectors::USDT_TESTNET.to_owned(),
+                amount: vectors::SEQ104_AMOUNT.to_string(),
+            }],
+            label: Some("BetSimply account".to_owned()),
+        };
+        assert_eq!(spec.params.len(), 9);
+        assert_eq!(spec.params["t_chal"], serde_json::json!(3));
+        assert_eq!(params_from_spec(&spec.kind, &spec.params).unwrap(), params);
+        let owner = Wallet {
+            keys: BTreeSet::from([terms.owner_pk]),
+            ..Wallet::default()
+        };
+        let domain = "scott-mcp2.taileb1abf.ts.net";
+        let mut store = ContractStore::default();
+
+        // The first failure is the answer, in the spec's order.
+        let mut lie = spec.clone();
+        lie.params.insert("t_chal".to_owned(), serde_json::json!(144));
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::LeafMismatch.into(), "a T_CHAL the pinned programs do not enforce");
+        let mut lie = spec.clone();
+        lie.contract_id = "00".repeat(32);
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::IdMismatch.into());
+        let mut lie = spec.clone();
+        let mut root = terms.program_root;
+        root[0] ^= 1;
+        lie.leaf = hex::encode(root);
+        let mut lie_terms = terms.clone();
+        lie_terms.program_root = root;
+        let lie_params = ContractParams::BsChannelV5(lie_terms);
+        lie.params = serde_json::from_str(&lie_params.canonical_json()).unwrap();
+        lie.contract_id = hex::encode(lie_params.contract_id());
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::LeafMismatch.into(), "a program set the wallet has not pinned");
+        let mut lie = spec.clone();
+        let mut lie_terms = terms.clone();
+        lie_terms.house_pk = bs_channel::PINS[1].house_pk;
+        let lie_params = ContractParams::BsChannelV5(lie_terms);
+        lie.params = serde_json::from_str(&lie_params.canonical_json()).unwrap();
+        lie.contract_id = hex::encode(lie_params.contract_id());
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::LeafMismatch.into(), "a house the pinned programs were not built for");
+        let mut lie = spec.clone();
+        lie.state = Some(vectors::seq104().to_hex().to_uppercase());
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::ScriptMismatch.into(), "not the wire form");
+        let mut lie = spec.clone();
+        lie.state = Some("11800000000".to_owned());
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::ScriptMismatch.into(), "a number is not a channel state");
+        let mut lie = spec.clone();
+        lie.state = Some(vectors::seq0().to_hex());
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::ScriptMismatch.into(), "the coin is not at the seq-0 script");
+        assert_eq!(register(&mut store, &spec, domain, 1, &Wallet::default(), &chain).outcome, Reject::RoleNotBound.into(), "not this wallet's identity key");
+        let mut lie = spec.clone();
+        lie.role = "lender".to_owned();
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::RoleNotBound.into());
+        let mut lie = spec.clone();
+        lie.coins[0].amount = "11700000000".to_owned();
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::CoinMismatch.into());
+        let mut lie = spec.clone();
+        lie.coins.push(lie.coins[0].clone());
+        assert_eq!(register(&mut store, &lie, domain, 1, &owner, &chain).outcome, Reject::CoinMismatch.into(), "one coin, one channel");
+        assert!(store.records().next().is_none());
+
+        // The truth registers, and reads back as it was described.
+        assert_eq!(register(&mut store, &spec, domain, 1_000, &owner, &chain).outcome, ContractOutcome::Registered);
+        let record = store.get(&key).unwrap().clone();
+        assert_eq!(record.role, Role::Owner);
+        assert_eq!(record.status, ContractStatus::Active);
+        assert_eq!(record.state.as_ref().and_then(ContractState::channel), Some(vectors::seq104()));
+        let mut described = spec_of(&record);
+        described.label = spec.label.clone();
+        assert_eq!(described, spec);
+        assert_eq!(register(&mut store, &spec, domain, 1_000, &owner, &chain).outcome, ContractOutcome::Unchanged);
+        assert_eq!(
+            record.render_terms("", "USDt"),
+            "BetSimply account · 118 USDt · yours to withdraw once the house has been silent for 3 blocks (≈ 3 min)"
+        );
+        assert_eq!(record.params.cutoff(), None, "relative to the house's last move, not a height");
+        let entries = statement(&store, domain);
+        assert_eq!(entries[0].kind, kind::BS_CHANNEL_V5);
+        assert_eq!(entries[0].state.as_deref(), Some(vectors::seq104().to_hex().as_str()));
+
+        // A checkpoint moves the coin: believed only once the chain shows
+        // the old coin spent by the transaction that carries the new one.
+        let mut next = vectors::seq104();
+        next.seq = 120;
+        next.player_bal = 124_17607135;
+        next.house_bal = 0;
+        let next_script = bs_channel::channel_script(&terms, &next);
+        let mut moved = spec.clone();
+        moved.state = Some(next.to_hex());
+        moved.coins = vec![SpecCoin { txid: txid(0x77).to_string(), vout: 0, asset: vectors::USDT_TESTNET.to_owned(), amount: "12417607135".to_owned() }];
+        chain.put(txid(0x77), 0, vectors::USDT_TESTNET, 124_17607135, next_script);
+        assert_eq!(register(&mut store, &moved, domain, 2_000, &owner, &chain).outcome, Reject::CoinMismatch.into());
+        chain.spend(txid104, 0, txid(0x77));
+        assert_eq!(register(&mut store, &moved, domain, 2_000, &owner, &chain).outcome, ContractOutcome::Updated);
+        let record = store.get(&key).unwrap();
+        assert_eq!(record.state.as_ref().and_then(ContractState::channel), Some(next));
+        assert_eq!(record.history.len(), 2);
+        assert_eq!(record.history[1].state_after.as_ref().map(ContractState::wire).as_deref(), Some(next.to_hex().as_str()));
+
+        // The record survives a round trip through the host's JSON, and a
+        // record stored before channels existed still reads.
+        let json = serde_json::to_string(&store).unwrap();
+        assert!(json.contains(&format!("\"state\":\"{}\"", next.to_hex())), "{json}");
+        assert_eq!(serde_json::from_str::<ContractStore>(&json).unwrap(), store);
+        let old = r#"{"txid":"be8563700e00cf6907cd1901a0a65c05c18dd55bbc69f5f8d1ad9f999c69b423","path":"fill","state_after":46117756200}"#;
+        assert_eq!(serde_json::from_str::<ContractEvent>(old).unwrap().state_after, Some(ContractState::Amount(46117756200)));
     }
 }

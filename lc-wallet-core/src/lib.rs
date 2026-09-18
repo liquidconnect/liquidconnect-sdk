@@ -37,6 +37,7 @@
 //! [`sideswap-io/sideswap_rust`]: https://github.com/sideswap-io/sideswap_rust
 
 pub mod approval;
+pub mod bs_channel;
 pub mod contract_registration;
 pub mod contract_views;
 pub mod contracts;

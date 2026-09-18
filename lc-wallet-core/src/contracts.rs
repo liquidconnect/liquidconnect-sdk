@@ -45,6 +45,7 @@ use elements::hashes::{Hash as _, HashEngine as _, sha256};
 use elements::{AssetId, OutPoint, Script, Txid};
 
 use crate::approval::{OwnedInput, decode_pset};
+use crate::bs_channel::{self, ChannelTerms};
 use crate::key::Network;
 use crate::lending::{
     FILL_BORROWER_NFT_OUTPUT, FILL_LENDER_NFT_OUTPUT, FILL_POSITION_OUTPUT, OfferRowClaim, SWAPTION_CLAIM_LEAF,
@@ -64,6 +65,8 @@ pub mod kind {
     pub const LEND_POSITION_V4: &str = "sw/lend/position/v4";
     pub const LEND_OFFER_V1: &str = "sw/lend/offer/v1";
     pub const LEND_CLAIM_V1: &str = "sw/lend/claim/v1";
+    /// A BetSimply house channel under the v5 program set (`bs_channel`).
+    pub const BS_CHANNEL_V5: &str = "bs/channel/v5";
 }
 
 /// A position's terms: exactly the covenant's witness terms in digest
@@ -137,6 +140,9 @@ pub enum ContractParams {
     /// position, leftover and expired offer pays the lender.
     #[serde(rename = "sw/lend/claim/v1")]
     LendClaimV1 { lender_token: AssetId },
+    /// `bs/channel/v5`: a BetSimply house channel; the person is its owner.
+    #[serde(rename = "bs/channel/v5")]
+    BsChannelV5(ChannelTerms),
 }
 
 impl ContractParams {
@@ -146,12 +152,16 @@ impl ContractParams {
             ContractParams::LendPositionV4(_) => kind::LEND_POSITION_V4,
             ContractParams::LendOfferV1 { .. } => kind::LEND_OFFER_V1,
             ContractParams::LendClaimV1 { .. } => kind::LEND_CLAIM_V1,
+            ContractParams::BsChannelV5(_) => kind::BS_CHANNEL_V5,
         }
     }
 
-    /// The tapleaf hash the SDK pins for this kind: the allowlist.
+    /// The tapleaf hash the SDK pins for this kind: the allowlist. A house
+    /// channel's is its program root, pinned per house ([`bs_channel::PINS`],
+    /// checked by [`ContractParams::leaf_is_pinned`]).
     pub fn leaf(&self) -> [u8; 32] {
         match self {
+            ContractParams::BsChannelV5(t) => t.program_root,
             ContractParams::LendPositionV5(_) => SWAPTION_LENDING_V5_LEAF,
             ContractParams::LendPositionV4(_) => SWAPTION_LENDING_V4_LEAF,
             ContractParams::LendOfferV1 { .. } => SWAPTION_OFFER_LEAF,
@@ -224,6 +234,17 @@ impl ContractParams {
             ContractParams::LendClaimV1 { lender_token } => {
                 m.insert("lender_token", a(lender_token));
             }
+            ContractParams::BsChannelV5(t) => {
+                m.insert("asset", a(&t.asset));
+                m.insert("channel_id", x(&t.channel_id));
+                m.insert("house_pk", x(&t.house_pk));
+                m.insert("house_sink", x(&t.house_sink));
+                m.insert("owner_pk", x(&t.owner_pk));
+                m.insert("bet_pk", x(&t.bet_pk));
+                m.insert("program_root", x(&t.program_root));
+                m.insert("t_chal", h(t.t_chal));
+                m.insert("t_reveal", h(t.t_reveal));
+            }
         }
         serde_json::to_string(&m).expect("a map serialises")
     }
@@ -234,13 +255,20 @@ impl ContractParams {
         tagged(b"liquidconnect/contract/v1", &[self.kind().as_bytes(), &[0u8], self.canonical_json().as_bytes()])
     }
 
-    /// The covenant scriptPubKey for these terms and `state` (the mutable
-    /// slot: remaining debt of a position, remaining cash of an offer;
-    /// `None` for a claim script).
+    /// The covenant scriptPubKey for these terms and a one-number `state`
+    /// (remaining debt of a position, remaining cash of an offer; `None` for
+    /// a claim script). A house channel's state is not one number: use
+    /// [`ContractParams::script_state`].
     pub fn script(&self, state: Option<u64>) -> anyhow::Result<Script> {
+        self.script_state(state.map(ContractState::Amount).as_ref())
+    }
+
+    /// The covenant scriptPubKey for these terms and `state`, whatever
+    /// shape the kind gives its mutable slot.
+    pub fn script_state(&self, state: Option<&ContractState>) -> anyhow::Result<Script> {
         match self {
             ContractParams::LendPositionV5(t) => {
-                let debt = state.ok_or_else(|| anyhow::anyhow!("a position needs its remaining debt"))?;
+                let debt = state.and_then(ContractState::amount).ok_or_else(|| anyhow::anyhow!("a position needs its remaining debt"))?;
                 let digest = v5_terms_digest(
                     t.collateral,
                     t.cash,
@@ -257,7 +285,7 @@ impl ContractParams {
                 Ok(v5_position_script(&digest, debt))
             }
             ContractParams::LendPositionV4(t) => {
-                let debt = state.ok_or_else(|| anyhow::anyhow!("a position needs its remaining debt"))?;
+                let debt = state.and_then(ContractState::amount).ok_or_else(|| anyhow::anyhow!("a position needs its remaining debt"))?;
                 let digest = v4_terms_digest(
                     t.collateral,
                     t.cash,
@@ -283,11 +311,45 @@ impl ContractParams {
                 cutoff,
                 rows,
             } => {
-                let remaining = state.ok_or_else(|| anyhow::anyhow!("an offer needs its remaining cash"))?;
+                let remaining = state.and_then(ContractState::amount).ok_or_else(|| anyhow::anyhow!("an offer needs its remaining cash"))?;
                 let digest = offer_terms_digest(*cash, *lender_token, claim, fee_script, position_leaf, *fee_min, *cutoff, rows);
                 Ok(offer_script(&digest, remaining))
             }
             ContractParams::LendClaimV1 { lender_token } => Ok(claim_script(*lender_token)),
+            ContractParams::BsChannelV5(t) => {
+                let bytes = state.and_then(ContractState::bytes).ok_or_else(|| anyhow::anyhow!("a channel needs its state"))?;
+                let state = bs_channel::ChannelState::from_bytes(bytes).ok_or_else(|| anyhow::anyhow!("a channel state is {} bytes", bs_channel::STATE_LEN))?;
+                Ok(bs_channel::channel_script(t, &state))
+            }
+        }
+    }
+
+    /// Whether the kind has a mutable slot at all (a claim script has none).
+    pub fn has_state(&self) -> bool {
+        !matches!(self, ContractParams::LendClaimV1 { .. })
+    }
+
+    /// The wire form of the mutable slot read back strictly, per kind: the
+    /// canonical decimal of a u64 for the lending kinds, the 104 lower-case
+    /// hex characters of a channel's 52 state bytes. `None` for anything
+    /// else, and for a kind with no slot.
+    pub fn parse_state(&self, text: &str) -> Option<ContractState> {
+        match self {
+            ContractParams::LendClaimV1 { .. } => None,
+            ContractParams::BsChannelV5(_) => bs_channel::ChannelState::from_hex(text).map(|s| ContractState::Bytes(s.to_bytes().to_vec())),
+            _ => parse_u64(text).map(ContractState::Amount),
+        }
+    }
+
+    /// Rule 2's pin. The lending kinds' leaf is the constant [`leaf`](Self::leaf)
+    /// returns, so the leaf check is the pin. A house channel's leaf is its
+    /// program root, which the spec names: it is accepted only when that
+    /// root is one of [`bs_channel::PINS`] with the house parameters the
+    /// root was compiled with.
+    pub fn leaf_is_pinned(&self) -> bool {
+        match self {
+            ContractParams::BsChannelV5(t) => bs_channel::pinned(t).is_some(),
+            _ => true,
         }
     }
 
@@ -300,6 +362,8 @@ impl ContractParams {
             ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t) => Some(t.expiry),
             ContractParams::LendOfferV1 { cutoff, .. } => Some(*cutoff),
             ContractParams::LendClaimV1 { .. } => None,
+            // Relative, not a height: T_CHAL blocks after the house's last move.
+            ContractParams::BsChannelV5(_) => None,
         }
     }
 
@@ -309,7 +373,74 @@ impl ContractParams {
             ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t) => Some(t.lender_nft),
             ContractParams::LendOfferV1 { lender_token, .. } => Some(*lender_token),
             ContractParams::LendClaimV1 { lender_token } => Some(*lender_token),
+            ContractParams::BsChannelV5(_) => None,
         }
+    }
+}
+
+/// A u64 as the canonical decimal string: digits only, no sign, no leading
+/// zero but "0" itself.
+pub(crate) fn parse_u64(text: &str) -> Option<u64> {
+    let canonical = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) && (text == "0" || !text.starts_with('0'));
+    if canonical { text.parse().ok() } else { None }
+}
+
+/// The mutable slot of a record. A lending position or offer has one
+/// number (remaining debt, remaining cash), kept as before; a house channel
+/// has a packed byte string its kind defines ([`bs_channel::ChannelState`]).
+/// On the wire a number travels as its decimal string and bytes as
+/// lower-case hex ([`ContractState::wire`]); a stored record keeps the
+/// number as a JSON number and the bytes as a hex string, so records
+/// written before this type existed read back unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ContractState {
+    Amount(u64),
+    Bytes(#[serde(with = "hex_vec")] Vec<u8>),
+}
+
+mod hex_vec {
+    pub fn serialize<S: serde::Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&hex::encode(bytes))
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let text = <String as serde::Deserialize>::deserialize(d)?;
+        hex::decode(&text).map_err(serde::de::Error::custom)
+    }
+}
+
+impl ContractState {
+    pub fn amount(&self) -> Option<u64> {
+        match self {
+            ContractState::Amount(n) => Some(*n),
+            ContractState::Bytes(_) => None,
+        }
+    }
+
+    pub fn bytes(&self) -> Option<&[u8]> {
+        match self {
+            ContractState::Amount(_) => None,
+            ContractState::Bytes(b) => Some(b),
+        }
+    }
+
+    /// The wire form: a decimal u64, or lower-case hex.
+    pub fn wire(&self) -> String {
+        match self {
+            ContractState::Amount(n) => n.to_string(),
+            ContractState::Bytes(b) => hex::encode(b),
+        }
+    }
+
+    /// A channel's state, if this is one.
+    pub fn channel(&self) -> Option<bs_channel::ChannelState> {
+        self.bytes().and_then(bs_channel::ChannelState::from_bytes)
+    }
+}
+
+impl From<u64> for ContractState {
+    fn from(n: u64) -> Self {
+        ContractState::Amount(n)
     }
 }
 
@@ -319,6 +450,27 @@ impl ContractParams {
 pub enum Role {
     Borrower,
     Lender,
+    /// A house channel's owner: the wallet whose identity key is `owner_pk`.
+    Owner,
+}
+
+impl Role {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::Borrower => "borrower",
+            Role::Lender => "lender",
+            Role::Owner => "owner",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Role> {
+        match text {
+            "borrower" => Some(Role::Borrower),
+            "lender" => Some(Role::Lender),
+            "owner" => Some(Role::Owner),
+            _ => None,
+        }
+    }
 }
 
 /// A coin the contract's money sits in, explicit on chain.
@@ -348,7 +500,7 @@ pub enum ContractStatus {
 pub struct ContractEvent {
     pub txid: Txid,
     pub path: String,
-    pub state_after: Option<u64>,
+    pub state_after: Option<ContractState>,
 }
 
 /// A contract the wallet is party to, as the host stores it.
@@ -360,7 +512,7 @@ pub struct ContractRecord {
     /// The relying party the record came from (the connect server's word).
     pub domain: String,
     /// The mutable slot, where the kind has one.
-    pub state: Option<u64>,
+    pub state: Option<ContractState>,
     pub coins: Vec<ContractCoin>,
     pub status: ContractStatus,
     /// Wallet-local; never sent anywhere.
@@ -405,7 +557,7 @@ pub enum Derived {
         select: Select,
         txid: Txid,
         path: String,
-        state: Option<u64>,
+        state: Option<ContractState>,
         coins: Option<Vec<ContractCoin>>,
         coins_removed: Vec<OutPoint>,
         status: Option<ContractStatus>,
@@ -511,13 +663,13 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
                     amount: value,
                 });
             }
-            let state = amounts.first().copied();
+            let state = amounts.first().copied().map(ContractState::Amount);
             out.push(Derived::New(ContractRecord {
                 contract_id: params.contract_id(),
                 params,
                 role: Role::Lender,
                 domain: ctx.domain.to_owned(),
-                state,
+                state: state.clone(),
                 coins,
                 status: ContractStatus::Pending,
                 hidden: false,
@@ -567,7 +719,7 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
                 select: Select::PositionByBorrowerNft(token.asset),
                 txid,
                 path: "exercise".to_owned(),
-                state: Some(*remaining),
+                state: Some(ContractState::Amount(*remaining)),
                 coins: Some(coins),
                 coins_removed: Vec::new(),
                 status: Some(status),
@@ -592,7 +744,7 @@ pub fn derive(ctx: &FundContext<'_>) -> anyhow::Result<Vec<Derived>> {
                 select: Select::OfferByCoin(offer_coin),
                 txid,
                 path: "cancel".to_owned(),
-                state: Some(0),
+                state: Some(ContractState::Amount(0)),
                 coins: Some(Vec::new()),
                 coins_removed: vec![offer_coin],
                 status: Some(ContractStatus::Closed { path: "cancel".to_owned() }),
@@ -714,7 +866,7 @@ fn new_position(params: ContractParams, txid: Txid, domain: &str) -> Derived {
         params,
         role: Role::Borrower,
         domain: domain.to_owned(),
-        state: Some(buyback),
+        state: Some(ContractState::Amount(buyback)),
         coins: vec![ContractCoin {
             outpoint: OutPoint::new(txid, FILL_POSITION_OUTPUT as u32),
             asset: collateral,
@@ -725,7 +877,7 @@ fn new_position(params: ContractParams, txid: Txid, domain: &str) -> Derived {
         history: vec![ContractEvent {
             txid,
             path: "fill".to_owned(),
-            state_after: Some(buyback),
+            state_after: Some(ContractState::Amount(buyback)),
         }],
         created_at: 0,
         updated_at: 0,
@@ -814,8 +966,8 @@ impl ContractStore {
                     .collect();
                 for key in &keys {
                     let r = self.records.get_mut(key).expect("listed above");
-                    if let Some(s) = state {
-                        r.state = Some(s);
+                    if let Some(s) = &state {
+                        r.state = Some(s.clone());
                     }
                     if let Some(c) = &coins {
                         r.coins = c.clone();
@@ -827,7 +979,7 @@ impl ContractStore {
                     r.history.push(ContractEvent {
                         txid,
                         path: path.clone(),
-                        state_after: r.state,
+                        state_after: r.state.clone(),
                     });
                     r.updated_at = now;
                 }
@@ -1358,14 +1510,14 @@ pub fn recover_position(key: &NoteKey, own: &OwnTx<'_>, domain: &str) -> Option<
         params,
         role: Role::Borrower,
         domain: domain.to_owned(),
-        state: Some(buyback),
+        state: Some(ContractState::Amount(buyback)),
         coins: vec![coin],
         status: if own.confirmed { ContractStatus::Active } else { ContractStatus::Pending },
         hidden: false,
         history: vec![ContractEvent {
             txid,
             path: "fill".to_owned(),
-            state_after: Some(buyback),
+            state_after: Some(ContractState::Amount(buyback)),
         }],
         created_at: 0,
         updated_at: 0,
@@ -1389,7 +1541,7 @@ impl ContractRecord {
         let t = self.params.position()?;
         let fill = self.history.first().filter(|e| e.path == "fill")?;
         Some(ContractRecord {
-            state: Some(t.buyback),
+            state: Some(ContractState::Amount(t.buyback)),
             coins: vec![ContractCoin {
                 outpoint: OutPoint::new(fill.txid, FILL_POSITION_OUTPUT as u32),
                 asset: t.collateral,
@@ -1440,13 +1592,13 @@ fn close_record(record: &mut ContractRecord, txid: Txid, path: &str, coin_spent:
         record.coins.clear();
     }
     if state.is_some() {
-        record.state = state;
+        record.state = state.map(ContractState::Amount);
     }
     record.status = ContractStatus::Closed { path: path.to_owned() };
     record.history.push(ContractEvent {
         txid,
         path: path.to_owned(),
-        state_after: record.state,
+        state_after: record.state.clone(),
     });
 }
 
@@ -1489,7 +1641,7 @@ pub fn follow_position(record: &mut ContractRecord, history: &dyn OwnHistory) ->
         let Some(coin) = record.coins.first().map(|c| c.outpoint) else {
             break;
         };
-        let debt = record.state.unwrap_or(t.buyback);
+        let debt = record.state.as_ref().and_then(ContractState::amount).unwrap_or(t.buyback);
         let (tx, with_token) = match token_at.and_then(|at| history.spender(&at)) {
             Some(tx) => (tx, true),
             None => match history.spender(&coin) {
@@ -1537,11 +1689,11 @@ pub fn follow_position(record: &mut ContractRecord, history: &dyn OwnHistory) ->
             break;
         };
         record.coins = vec![next];
-        record.state = Some(remaining);
+        record.state = Some(ContractState::Amount(remaining));
         record.history.push(ContractEvent {
             txid,
             path: path.to_owned(),
-            state_after: Some(remaining),
+            state_after: Some(ContractState::Amount(remaining)),
         });
         if with_token {
             token_at = tx.output.iter().enumerate().find_map(|(vout, o)| {
@@ -1783,6 +1935,8 @@ impl ContractStatus {
                 "fill" => "filled".to_owned(),
                 "collect" => "collected".to_owned(),
                 "not_broadcast" => "never reached the chain".to_owned(),
+                "close" => "closed with the house".to_owned(),
+                "settle" => "settled on chain".to_owned(),
                 other => format!("closed ({other})"),
             },
         }
@@ -1801,7 +1955,7 @@ impl ContractRecord {
     pub fn render_terms(&self, collateral_symbol: &str, cash_symbol: &str) -> String {
         match (&self.params, self.role) {
             (ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t), Role::Borrower) => {
-                let owed = self.state.unwrap_or(t.buyback);
+                let owed = self.state.as_ref().and_then(ContractState::amount).unwrap_or(t.buyback);
                 let owed_text = if owed == t.buyback {
                     format!("buy back for {} {cash_symbol}", fmt8(t.buyback))
                 } else {
@@ -1818,8 +1972,8 @@ impl ContractRecord {
                     expiry = t.expiry
                 )
             }
-            (ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t), Role::Lender) => {
-                let owed = self.state.unwrap_or(t.buyback);
+            (ContractParams::LendPositionV5(t) | ContractParams::LendPositionV4(t), _) => {
+                let owed = self.state.as_ref().and_then(ContractState::amount).unwrap_or(t.buyback);
                 format!(
                     "Bought {} {collateral_symbol} · the borrower may buy it back for {} {cash_symbol} until block {expiry} · from block {expiry} the collateral is yours",
                     fmt8(t.size),
@@ -1851,6 +2005,18 @@ impl ContractRecord {
                 format!(
                     "What your lending paid: {n} coin{} waiting · collect with your lender token",
                     if n == 1 { "" } else { "s" }
+                )
+            }
+            (ContractParams::BsChannelV5(t), _) => {
+                // `cash_symbol` is the channel's one asset. Liquid makes a
+                // block a minute, so T_CHAL blocks is about T_CHAL minutes.
+                let house = bs_channel::pinned(t).map(|pin| pin.house).unwrap_or("House");
+                let balance = self.state.as_ref().and_then(ContractState::channel).map(|s| s.player_bal).unwrap_or(0);
+                format!(
+                    "{house} account · {} {cash_symbol} · yours to withdraw once the house has been silent for {t_chal} block{} (≈ {t_chal} min)",
+                    fmt8(balance),
+                    if t.t_chal == 1 { "" } else { "s" },
+                    t_chal = t.t_chal
                 )
             }
         }
@@ -2108,7 +2274,7 @@ mod tests {
         let Derived::New(record) = &derived[0] else { panic!("expected a new record") };
         assert_eq!(record.params, position_params(&payout, &lastlook));
         assert_eq!(record.role, Role::Borrower);
-        assert_eq!(record.state, Some(1_242_00000000));
+        assert_eq!(record.state, Some(ContractState::Amount(1_242_00000000)));
         assert_eq!(record.status, ContractStatus::Pending);
         let txid = funded.extract_tx().unwrap().txid();
         assert_eq!(record.coins, vec![ContractCoin { outpoint: OutPoint::new(txid, 0), asset: asset(LBTC), amount: 2_000_000 }]);
@@ -2215,7 +2381,7 @@ mod tests {
                 select: Select::PositionByBorrowerNft(asset(NFT)),
                 txid,
                 path: "exercise".to_owned(),
-                state: Some(621_00000000),
+                state: Some(ContractState::Amount(621_00000000)),
                 coins: Some(vec![ContractCoin { outpoint: OutPoint::new(txid, 1), asset: asset(LBTC), amount: 1_000_000 }]),
                 coins_removed: vec![],
                 status: Some(ContractStatus::Active),
@@ -2240,7 +2406,7 @@ mod tests {
         })
         .unwrap();
         let Derived::Transition { state, coins, status, .. } = &derived[0] else { panic!("expected a transition") };
-        assert_eq!(*state, Some(0));
+        assert_eq!(*state, Some(ContractState::Amount(0)));
         assert_eq!(*coins, Some(vec![]));
         assert_eq!(*status, Some(ContractStatus::Closed { path: "exercise".to_owned() }));
 
@@ -2303,7 +2469,7 @@ mod tests {
         let Derived::New(offer) = &derived[0] else { panic!() };
         assert_eq!(offer.params.kind(), kind::LEND_OFFER_V1);
         assert_eq!(offer.role, Role::Lender);
-        assert_eq!(offer.state, Some(25_000_00000000));
+        assert_eq!(offer.state, Some(ContractState::Amount(25_000_00000000)));
         assert_eq!(offer.coins, vec![ContractCoin { outpoint: OutPoint::new(txid, 0), asset: asset(USDT), amount: 25_000_00000000 }]);
         assert_eq!(offer.params.script(Some(25_000_00000000)).unwrap(), offer_script(&digest, 25_000_00000000));
         assert_eq!(offer.params.cutoff(), Some(3_199_000));
@@ -2469,7 +2635,7 @@ mod tests {
         .unwrap();
         assert_eq!(store.apply(derived[0].clone(), 3_000), vec![key.clone()]);
         let r = store.get(&key).unwrap();
-        assert_eq!(r.state, Some(621_00000000));
+        assert_eq!(r.state, Some(ContractState::Amount(621_00000000)));
         assert_eq!(r.coins, vec![ContractCoin { outpoint: OutPoint::new(exercise_txid, 1), asset: asset(LBTC), amount: 1_000_000 }]);
         assert_eq!(r.history.len(), 2);
         assert_eq!(r.history[1].path, "exercise");
@@ -2587,7 +2753,7 @@ mod tests {
             select: Select::OfferByCoin(coin(0xa2).outpoint),
             txid: cancel_txid,
             path: "cancel".to_owned(),
-            state: Some(0),
+            state: Some(ContractState::Amount(0)),
             coins: Some(vec![]),
             coins_removed: vec![coin(0xa2).outpoint],
             status: Some(ContractStatus::Closed { path: "cancel".to_owned() }),
@@ -2745,7 +2911,7 @@ mod tests {
         let record = recover_position(&key(), &own, "").expect("the fill is found again");
         assert_eq!(record.params, params);
         assert_eq!(record.role, Role::Borrower);
-        assert_eq!(record.state, Some(1_242_00000000));
+        assert_eq!(record.state, Some(ContractState::Amount(1_242_00000000)));
         assert_eq!(record.status, ContractStatus::Active);
         assert_eq!(record.domain, "");
         assert_eq!(record.coins, vec![ContractCoin { outpoint: OutPoint::new(fill.txid(), 0), asset: asset(LBTC), amount: 2_000_000 }]);
@@ -2810,7 +2976,7 @@ mod tests {
         // A partial buyback moves the coin and the debt.
         let mut moved = recovered.clone();
         follow_position(&mut moved, &History(vec![fill.clone(), partial.clone()]));
-        assert_eq!(moved.state, Some(half));
+        assert_eq!(moved.state, Some(ContractState::Amount(half)));
         assert_eq!(moved.status, ContractStatus::Active);
         assert_eq!(moved.coins, vec![ContractCoin { outpoint: OutPoint::new(partial.txid(), 1), asset: asset(LBTC), amount: 1_000_000 }]);
         assert_eq!(moved.history.len(), 2);
@@ -2821,7 +2987,7 @@ mod tests {
         let mut closed = recovered.clone();
         follow_position(&mut closed, &History(vec![full.clone(), partial.clone(), fill.clone()]));
         assert_eq!(closed.status, ContractStatus::Closed { path: "exercise".to_owned() });
-        assert_eq!(closed.state, Some(0));
+        assert_eq!(closed.state, Some(ContractState::Amount(0)));
         assert!(closed.coins.is_empty());
         assert_eq!(closed.history.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(), vec!["fill", "exercise", "exercise"]);
 
@@ -3038,7 +3204,7 @@ mod tests {
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].status, ContractStatus::Pending);
         assert_eq!(again[0].coins, created.coins);
-        assert_eq!(again[0].state, Some(1_242_00000000));
+        assert_eq!(again[0].state, Some(ContractState::Amount(1_242_00000000)));
         assert_eq!(again[0].domain, "paper.swaption.io");
         assert_eq!(again[0].created_by(), Some(fill.txid()));
 
@@ -3047,7 +3213,7 @@ mod tests {
         let mut followed = created.clone();
         assert!(follow_position(&mut followed, &History(vec![partial.clone()])));
         assert_eq!(store.restore(followed.clone(), 2_000, 3_600), vec![k.clone()]);
-        assert_eq!(store.get(&k).unwrap().state, Some(half));
+        assert_eq!(store.get(&k).unwrap().state, Some(ContractState::Amount(half)));
         assert_eq!(store.get(&k).unwrap().updated_at, 2_000);
         assert!(store.restore(followed.clone(), 3_000, 3_600).is_empty());
 
@@ -3231,7 +3397,7 @@ mod tests {
         );
         follow_position(&mut p51, &History(vec![fill51.clone(), buyback51.clone()]));
         assert_eq!(p51.status, ContractStatus::Closed { path: "exercise".to_owned() });
-        assert_eq!(p51.state, Some(0));
+        assert_eq!(p51.state, Some(ContractState::Amount(0)));
         assert!(p51.coins.is_empty());
         assert_eq!(p51.history.last().unwrap().txid, buyback51.txid());
 

@@ -25,6 +25,7 @@ use crate::contracts::script_hash;
 pub struct FactsWalletView {
     script_hashes: BTreeSet<[u8; 32]>,
     tokens: BTreeSet<AssetId>,
+    keys: BTreeSet<[u8; 32]>,
 }
 
 impl FactsWalletView {
@@ -34,8 +35,9 @@ impl FactsWalletView {
     /// amounts of one asset are added up. A position token and a lender token
     /// are issued as ONE unit, so the wallet holds a token when it holds
     /// exactly one unit of the asset. Two units are a balance of something
-    /// else.
-    pub fn new<'a>(scripts: impl IntoIterator<Item = &'a Script>, balances: impl IntoIterator<Item = (AssetId, u64)>) -> Self {
+    /// else. `keys`: the wallet's own x-only public keys a contract may name
+    /// as its owner — its Liquid Connect identity key (one per network).
+    pub fn new<'a>(scripts: impl IntoIterator<Item = &'a Script>, balances: impl IntoIterator<Item = (AssetId, u64)>, keys: impl IntoIterator<Item = [u8; 32]>) -> Self {
         let mut totals = BTreeMap::<AssetId, u64>::new();
         for (asset, amount) in balances {
             let total = totals.entry(asset).or_default();
@@ -44,6 +46,7 @@ impl FactsWalletView {
         FactsWalletView {
             script_hashes: scripts.into_iter().map(script_hash).collect(),
             tokens: totals.into_iter().filter(|(_, total)| *total == 1).map(|(asset, _)| asset).collect(),
+            keys: keys.into_iter().collect(),
         }
     }
 }
@@ -55,6 +58,10 @@ impl WalletView for FactsWalletView {
 
     fn holds_token(&self, asset: AssetId) -> bool {
         self.tokens.contains(&asset)
+    }
+
+    fn owns_key(&self, key: &[u8; 32]) -> bool {
+        self.keys.contains(key)
     }
 }
 
@@ -204,7 +211,10 @@ mod tests {
         let wallet = FactsWalletView::new(
             [&paid_once, &never_paid],
             [(asset(1), 1), (asset(2), 2), (asset(3), 0), (asset(4), 100_000_000), (asset(5), 1), (asset(5), 1)],
+            [[9u8; 32]],
         );
+        assert!(wallet.owns_key(&[9u8; 32]));
+        assert!(!wallet.owns_key(&[8u8; 32]));
         assert!(wallet.owns_script_hash(&script_hash(&paid_once)));
         assert!(wallet.owns_script_hash(&script_hash(&never_paid)));
         assert!(!wallet.owns_script_hash(&script_hash(&spk(0x03))));

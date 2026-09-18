@@ -1187,7 +1187,7 @@ pub fn claim_script(lender_nft: elements::AssetId) -> elements::Script {
     nums_script(node)
 }
 
-fn tap_tagged(tag: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+pub(crate) fn tap_tagged(tag: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     use elements::hashes::{Hash as _, HashEngine as _, sha256};
     let t = sha256::Hash::hash(tag);
     let mut e = sha256::Hash::engine();
@@ -1199,12 +1199,12 @@ fn tap_tagged(tag: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     sha256::Hash::from_engine(e).to_byte_array()
 }
 
-fn tap_branch(a: [u8; 32], b: [u8; 32]) -> [u8; 32] {
+pub(crate) fn tap_branch(a: [u8; 32], b: [u8; 32]) -> [u8; 32] {
     let (l, r) = if a <= b { (a, b) } else { (b, a) };
     tap_tagged(b"TapBranch/elements", &[&l, &r])
 }
 
-fn nums_script(node: [u8; 32]) -> elements::Script {
+pub(crate) fn nums_script(node: [u8; 32]) -> elements::Script {
     use elements::hashes::Hash as _;
     use elements::secp256k1_zkp::{SECP256K1, XOnlyPublicKey};
     use elements::taproot::{TapNodeHash, TapTweakHash};
